@@ -1,0 +1,487 @@
+---
+title: "Predictors of Heroin Use in the United States"
+author: "Noah Lehman and Dan Willis"
+date: "December 8, 2016"
+output: ioslides_presentation
+
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+#Examining Data
+set.seed(23984)
+
+
+library(tidyverse)
+library(mice)
+library(labelled)
+library(boot)
+library(truncnorm)
+library(ggthemes)
+library(glmnet)
+library(tree)
+library(randomForest)
+#dan's path
+load("C:/Users/Daniel/Desktop/Fall 2016/DSPP/Data Science Final/36361-0001-Data.rda")
+
+#noah path load("C:/Users/noahj_000/Desktop/Data Science Final/ICPSR_36361/DS0001/36361-0001-Data.rda")
+df_o <- da36361.0001
+rm(da36361.0001)
+#str(df_o)
+#View(df_o)
+```
+
+```{r, include=FALSE}
+#Selecting variables for analysis
+df <- df_o %>% select(CASEID, QUESTID2, HEREVER, HERYRTOT, HERREC, ANLEVER, ANLYRTOT, ANALREC, DARVTYLC, PERCTYLX, VICOLOR, ANLCARD, CODEINE, DEMEROL, DILAUD, FIORICET, FIORINAL, HYDROCOD, METHDON, MORPHINE, OXYCONTN, PHENCOD, PROPOXY, SK65A, STADOL, TALACEN, TALWIN, TALWINNX, TRAMADOL, ULTRAM, ANLNOLST, TXEVER, TXYREVER, TXYRHOSP, TXYRRFIN, TXYRRFOP, TXYRMHC, TXYRTXER, TXYRDOC, TXYRJAIL, TXYRSHG, TXYRSOP, PREGNANT, NMERTMT2, INHOSPYR, LIFANXD,LIFDEPRS, LIFSTDS, HTINCHE2, WTPOUND2, AUOPTYR, AUINPYR, MEDICARE, CAIDCHIP, CHAMPUS, PRVHLTIN, HLTINNOS, HLTINALC, HLTINDRG, HLTINMNT, GOVTPROG, INCOME, POVERTY2, IRINSUR4, CATAG6, SERVICE, MILSTAT, HEALTH, IRSEX, IRMARIT, EDUCCAT2, PREGAGE2, NEWRACE2, USDRGTST, EMPSTATY, COUTYP2)
+
+
+#Fixing correct labels to variables rather than data frame
+var.labels <- attributes(df_o)$variable.labels[attributes(df)$names]
+
+attributes(df)$variable.labels <- var.labels
+```
+
+```{r, include=FALSE}
+#Recode Data Set 
+df_recode <- df %>% select(HEREVER, ANLEVER, DARVTYLC, PERCTYLX, VICOLOR, ANLCARD, CODEINE, DILAUD, DEMEROL, FIORICET, FIORINAL, HYDROCOD, METHDON, MORPHINE, OXYCONTN, PHENCOD, PROPOXY, SK65A, STADOL, TALACEN, TALWIN, TALWINNX, TRAMADOL, ULTRAM, ANLNOLST, TXEVER, TXYREVER, TXYRHOSP, TXYRRFIN, TXYRRFOP, TXYRMHC, TXYRTXER, TXYRDOC, TXYRJAIL, TXYRSHG, TXYRSOP, PREGNANT, INHOSPYR, LIFANXD, LIFDEPRS, LIFSTDS, AUOPTYR, AUINPYR, MEDICARE, CAIDCHIP, CHAMPUS, PRVHLTIN, HLTINNOS, HLTINALC, HLTINDRG, HLTINMNT, GOVTPROG, IRINSUR4, SERVICE, IRSEX, USDRGTST)
+
+recode2 <- names(df) %in% names(df_recode)
+df_recode2 <- df[!recode2]
+```
+
+```{r, include=FALSE}
+#Cleaning dummy variables
+df_recode <- as.data.frame(sapply(df_recode, as.numeric))
+df_recode[df_recode == 1 | df_recode == 3 |df_recode == 5 |df_recode == 7] <- 1
+df_recode[df_recode == 2 |df_recode == 4 |df_recode == 6] <- 0
+df_recode[is.na(df_recode)] <- 0
+```
+
+```{r, include=FALSE}
+#Cleaning other variables
+df_recode2$EMPSTATY <- as.character(df_recode2$EMPSTATY)
+df_recode2$EMPSTATY[is.na(df_recode2$EMPSTATY)] <- "(5) Child"
+df_recode2$EMPSTATY <- as.factor(df_recode2$EMPSTATY)
+
+df_recode2$IRMARIT <- as.character(df_recode2$IRMARIT)
+df_recode2$IRMARIT[is.na(df_recode2$IRMARIT)] <- "(5) Child"
+df_recode2$IRMARIT <- as.factor(df_recode2$IRMARIT)
+
+df_recode2$HEALTH <- as.character(df_recode2$HEALTH)
+df_recode2$HEALTH[is.na(df_recode2$HEALTH)] <- "(6) UNKNOWN"
+df_recode2$HEALTH <- as.factor(df_recode2$HEALTH)
+
+df_recode2$MILSTAT <- as.character(df_recode2$MILSTAT)
+df_recode2$MILSTAT[is.na(df_recode2$MILSTAT)] <- "(4) NONE"
+df_recode2$MILSTAT <- as.factor(df_recode2$MILSTAT)
+
+df_recode2$POVERTY2 <- as.character(df_recode2$POVERTY2)
+df_recode2$POVERTY2[is.na(df_recode2$POVERTY2)] <- "(4) COLLEGE"
+df_recode2$POVERTY2 <- as.factor(df_recode2$POVERTY2)
+
+wt_boot <- rtruncnorm(1468, 75, 295, mean(df_recode2$WTPOUND2, na.rm = T), sd(df_recode2$WTPOUND2, na.rm = T))
+df_recode2 <- df_recode2 %>% replace_na(list(WTPOUND2 =  wt_boot))
+
+ht_boot <- rtruncnorm(1468, 55, 75, mean(df_recode2$HTINCHE2, na.rm = T), sd(df_recode2$HTINCHE2, na.rm = T))
+df_recode2 <- df_recode2 %>% replace_na(list(HTINCHE2 =  ht_boot))
+
+df_recode2$NMERTMT2[is.na(df_recode2$NMERTMT2)] <- 0
+
+df_recode2$ANALREC <- as.character(df_recode2$ANALREC)
+df_recode2$ANALREC[is.na(df_recode2$ANALREC)] <- "(4) NEVER"
+df_recode2$ANALREC <- as.factor(df_recode2$ANALREC)
+
+df_recode2$ANLYRTOT[is.na(df_recode2$ANLYRTOT)] <- 0
+
+df_recode2$HERREC <- as.character(df_recode2$HERREC)
+df_recode2$HERREC[is.na(df_recode2$HERREC)] <- "(4) NEVER"
+df_recode2$HERREC <- as.factor(df_recode2$HERREC)
+
+df_recode2$HERYRTOT[is.na(df_recode2$HERYRTOT)] <- 0
+```
+
+```{r, include=FALSE}
+#Recombining cleaned variables
+df2 <- cbind(df_recode2, df_recode)
+df_names <- attributes(df)$names
+df2 <- df2[,df_names]
+attributes(df2)$variable.labels <- var.labels
+
+df2$NEWRACE2 <- recode(df2$NEWRACE2, '(4) NonHisp Native HI/Other Pac Isl' = "Other",'(6) NonHisp more than one race' = "Other", '(7) Hispanic' = "Hispanic", "(1) NonHisp White" = "White", "(2) NonHisp Black/Afr Am" = "Black", "(3) NonHisp Native Am/AK Native" = "Native Am", "(5) NonHisp Asian" = "Asian")
+
+
+
+
+df2$INCOME <- recode(df2$INCOME, '(1) Less than $20,000' = "Under $20K",'(2) $20,000 - $49,999' = "$20-50K", '(3) $50,000 - $74,999' = "$50-75K", '(4) $75,000 or More' = "Over $75K")
+
+
+df2$IRSEX <- as.factor(df2$IRSEX)
+
+
+df2$EDUCCAT2 <- recode(df2$EDUCCAT2, "(1) Less than high school (IREDUC2<=7 and AGE2>=7)" = "No Diploma", "(2) High school graduate (IREDUC2=8 and AGE2>=7)" = "HS Grad", "(3) Some college (IREDUC2=9-10 and AGE2>=7)" = "Some College", "(4) College graduate (IREDUC2=11 and AGE2>=7)" = "College Grad", "(5) 12 to 17 year olds (AGE2<=6)" = "Child" )
+
+
+
+
+
+#Fuck YEAH!
+anyNA(df2)
+```
+
+
+```{r, include = FALSE}
+#Race + Income
+df2_ri1 <- df2 %>%
+  group_by(NEWRACE2, INCOME) %>%
+  summarise(race_pro = mean(HEREVER), race_per = mean(HEREVER)*100, sum_her = sum(HEREVER))
+
+ggplot(df2_ri1) + aes(INCOME, race_per) + geom_bar(stat = "identity") + facet_wrap(~NEWRACE2) + theme_hc()  + theme(axis.line=element_line()) + geom_text(stat="identity",aes(label=sum_her),vjust=-0.3) + theme(axis.text.x = element_text(angle = 30, hjust = 0.8)) +labs(x = "", y= "", title = "Percent Heroin Use by Race and Income" )
+```
+
+
+##<large>Background
+
+
+- <large>$78.5 billion in costs
+
+- <large>2.1 million addicted to prescription pain medication
+
+- <large>467,000 addicted to heroin
+
+- <large>40 deaths per day
+
+
+
+
+##<large>Pain Relievers and Heroin Use
+```{r, echo = FALSE}
+
+qplot(ANLEVER,HEREVER,data= df2) + geom_jitter() + annotate("text", x = 0, y = 0, label = "47113", color = "red2", fontface = "bold", size = 15) + annotate("text", x = 1, y = 0, label = "7216", color = "red2", fontface = "bold", size = 15) + annotate("text", x = 0, y = 1, label = "192", color = "red2", fontface = "bold", size = 15) + annotate("text", x = 1, y = 1, label = "750", color = "red2", fontface = "bold", size = 15) + theme_minimal() + labs(y = "Ever tried Pain Relievers NonMedically" , x = "Ever tried Heroin") + theme(axis.text=element_text(size=12), axis.title=element_text(size=12,face="bold"))
+
+```
+
+
+
+```{r, include = FALSE}
+#gender, ever used pain reliver, ever used heroin
+##Gender, Pain Relievers and Heroin Use
+
+df2_ri3 <- df2 %>%
+  group_by(IRSEX, ANLEVER) %>%
+  summarise(sex_PR_pro = mean(HEREVER), sex_PR_per = mean(HEREVER)*100, sum_her = sum(HEREVER))
+
+df2_ri3$IRSEX <- recode(df2_ri3$IRSEX, '0' = "Female",'1' = "Male")
+df2_ri3$ANLEVER <- recode(df2_ri3$ANLEVER, '0' = "Never Tried",'1' = "Have Tried")
+
+ggplot(df2_ri3) + aes(ANLEVER, sex_PR_per) + geom_bar(stat = "identity") + facet_wrap(~IRSEX) + theme_hc()  + theme(axis.line=element_line()) + geom_text(stat="identity",aes(label=sum_her),vjust=-0.3) + theme(axis.text.x = element_text(angle = 30, hjust = 0.8)) +labs(x = "Have you ever used pain relievers nonmedically?", y= "Percent having tried heroin", title = "Percent Heroin Use by Sex and Pain Reliever Use" )
+
+```
+
+
+
+##<large>Pain Relievers and Percent Heroin Use 
+```{r, echo = FALSE}
+
+df2_ri5 <- df2 %>%
+  group_by(ANLEVER) %>%
+  summarise(PR_pro = mean(HEREVER), PR_per = mean(HEREVER)*100, sum_her = sum(HEREVER))
+
+
+df2_ri5$ANLEVER <- recode(df2_ri5$ANLEVER, '0' = "Never Tried",'1' = "Have Tried")
+
+ggplot(df2_ri5) + aes(ANLEVER, PR_per) + geom_bar(stat = "identity", width = .4) + theme_hc()  + theme(axis.line=element_line()) + geom_text(stat="identity",aes(label=sum_her),vjust=-0.3) + theme(axis.text.x = element_text(angle = 30, hjust = 0.8)) +labs(x = "Have you ever used pain relievers nonmedically?", y= "Percent having tried heroin") + theme(axis.text=element_text(size=16), axis.title=element_text(size=14,face="bold")) 
+
+```
+
+
+
+```{r reg setup, include = FALSE}
+anlever_reg <- lm(HEREVER~ANLEVER, data = df2)
+summary(anlever_reg)
+library(stargazer)
+```
+
+
+##Any Pain Relievers: Regression
+```{r, echo = FALSE, results = 'asis'}
+stargazer(anlever_reg, type = "html")
+```
+
+```{r, include = FALSE}
+
+pain_drugs_reg <- lm(HEREVER~DARVTYLC+ PERCTYLX+ VICOLOR+ CODEINE+ DEMEROL+ DILAUD+ FIORICET+ FIORINAL+ HYDROCOD+ METHDON+ MORPHINE+ OXYCONTN+ PHENCOD+ PROPOXY+ SK65A+ STADOL+ TALACEN+ TALWIN+ TALWINNX+ TRAMADOL+ ULTRAM+ ANLNOLST, data = df2)
+
+summary(pain_drugs_reg)
+
+
+```
+
+
+```{r, include = FALSE, results = 'asis'}
+
+stargazer(pain_drugs_reg, type = "html")
+
+```
+
+
+
+
+##Gender, Income and Percent Heroin Use
+```{r, echo = FALSE}
+#looking into most "important" variables
+
+df2_ri2 <- df2 %>%
+  group_by(IRSEX, INCOME) %>%
+  summarise(sex_pro = mean(HEREVER), sex_per = mean(HEREVER)*100, sum_her = sum(HEREVER))
+
+df2_ri2$IRSEX <- recode(df2_ri2$IRSEX, '0' = "Female",'1' = "Male")
+
+ggplot(df2_ri2) + aes(INCOME, sex_per) + geom_bar(stat = "identity") + facet_wrap(~IRSEX) + theme_hc()  + theme(axis.line=element_line()) + geom_text(stat="identity",aes(label=sum_her),vjust=-0.3) + theme(axis.text.x = element_text(angle = 30, hjust = 0.8)) +labs(x = "", y= "") + theme(axis.text=element_text(size=12), axis.title=element_text(size=14,face="bold"))
+
+```
+
+
+```{r, include = FALSE}
+
+
+df2_ri <- df2 %>%
+  group_by(NEWRACE2, INCOME, IRSEX) %>%
+  summarise(SEX_race_pro = mean(HEREVER), SEX_race_per = mean(HEREVER)*100, sum_her = sum(HEREVER))
+
+df2_ri$IRSEX <- recode(df2_ri$IRSEX, '0' = "Female", '1' = "Male")
+  
+
+ggplot(df2_ri) + aes(INCOME, SEX_race_per, fill = IRSEX) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  facet_wrap(~NEWRACE2) + 
+  theme_hc()  + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 0.8)) +
+  labs(x = "", y= "", title = "Percent Heroin Use by Race and Income", fill = "Gender" )
+```
+
+
+
+##<large>Race, Education, and Percent Heroin Use
+```{r, echo = FALSE}
+df2_ri6 <- df2 %>%
+  group_by(NEWRACE2, EDUCCAT2) %>%
+  summarise(race_pro = mean(HEREVER), race_per = mean(HEREVER)*100, sum_her = sum(HEREVER))
+
+#df2_ri6$IRSEX <- recode(df2_ri6$IRSEX, '0' = "Female", '1' = "Male")
+  
+
+ggplot(df2_ri6) + aes(EDUCCAT2, race_per) + 
+  geom_bar(stat = "identity") + 
+  facet_wrap(~NEWRACE2) + 
+  theme_hc()  + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 0.8)) +
+  labs(x = "", y= "") +   theme(axis.text=element_text(size=16), axis.title=element_text(size=14,face="bold")) 
+
+
+
+```
+
+
+```{r rf setup, include=FALSE}
+
+x <- df2 %>% select(-c(HEREVER, HERYRTOT, HERREC, CASEID, QUESTID2))
+y <- as.factor(df2$HEREVER)
+#model_rf <- randomForest(x = x, y = y, importance = TRUE)
+
+#save(model_rf, file = "model_rf.RData")
+
+
+load("C:/Users/Daniel/Desktop/Fall 2016/DSPP/Data Science Final/model_rf.RData")
+# Table of variable importance
+importance(model_rf)
+
+```
+
+##<large>Random Forest
+```{r, echo = FALSE}
+
+# Plot of variable importance
+varImpPlot(model_rf, n.var = 19, main = "Variable Importance Plot\n(top 19 only)",
+           type = 1, cex = .8, pt.cex = 1.75, pch = 15) 
+
+```
+
+```{r, include = FALSE}
+library(rpart)
+library(rpart.plot)
+
+```
+```{r, include = FALSE}
+#mydata <- df2 %>% select(-CASEID, -QUESTID2)
+#mydata <- model.matrix(~ . -1, data = mydata)
+#mydata <- scale(mydata)
+
+
+# K-Means Cluster Analysis
+#fit <- kmeans(mydata, 5) # 5 cluster solution
+# get cluster means 
+#aggregate(mydata,by=list(fit$cluster),FUN=mean)
+# append cluster assignment
+#mydata <- data.frame(mydata, fit$cluster)
+
+
+
+
+
+# Centroid Plot against 1st 2 discriminant functions
+#library(fpc)
+#plotcluster(mydata, fit$cluster)
+
+```
+
+
+
+##<large>Principal Components
+
+- Tried pain relievers nonmedically 
+- Education 
+- Race
+- Marital Status 
+- Age 
+- Income 
+- Location
+
+
+```{r, include = FALSE}
+#plot(fit)
+```
+
+
+
+
+
+
+
+##<large>Tree 
+```{r, echo = FALSE}
+
+
+binary <- rpart(HEREVER ~ IRSEX + IRMARIT + CATAG6 + ANLEVER + INCOME + EDUCCAT2 + NEWRACE2 + COUTYP2, data = df2, cp=.003)
+
+
+rpart.plot(binary)
+```
+
+
+
+
+##<large>Next Steps
+
+- <large>Incorporate geographic information
+
+- <large>Targeted outreach
+
+- <large>Ethical considerations
+
+
+```{r, include=FALSE}
+summary(df2$HEREVER)
+df_times <- df2 %>% filter(df2$HEREVER == 1, HERYRTOT > 1)
+qplot(x = WTPOUND2, y = HERYRTOT, data = df_times) + geom_jitter()
+```
+
+
+
+
+```{r, include = FALSE}
+#weight and heroin use
+ggplot(df2, aes(x = WTPOUND2, fill = as.factor(HEREVER), color = as.factor(HEREVER))) + geom_density(alpha = .4) + theme_classic() + theme(legend.position = "none") + labs(x = "Weight (lbs)" , y = "Proportion of Weights", color = "Tried Heroin") + ggtitle ("Weights and Heroin Use: Red = Never Taken Heroin, Blue = Have Taken")
+
+```
+
+```{r, include=FALSE}
+
+logit <- glm(HEREVER ~ .-CASEID -QUESTID2 -HERREC -HERYRTOT, df2, family = binomial)
+summary(logit)
+summary(logit)$coeff[-1,4] < 0.05
+
+predict_logit <- predict(logit, type = "response")
+
+qplot(predict_logit)
+
+```
+
+```{r, include=FALSE}
+#summary stats
+#race
+race_heroin <- aggregate(HEREVER~NEWRACE2, data = df2, mean)
+race_heroin
+mean(df2$HEREVER[df2$NEWRACE2 == "(7) Hispanic"])
+
+ggrh <- ggplot(data = race_heroin, aes(x = NEWRACE2, y = HEREVER))
+
+ggrh1 <- ggrh + geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 30, hjust = 1)) 
+
+ggrh1 + xlab("RACE") + ylab("Proportion having tried heroine")
+```
+
+```{r, include=FALSE}
+#income
+income_heroin <- aggregate(HEREVER~INCOME, data = df2, mean)
+income_heroin
+mean(df2$HEREVER[df2$INCOME == "(7) $75,000 or more"])
+
+ggih <- ggplot(data = income_heroin, aes(x = INCOME, y = HEREVER))
+
+ggih1 <- ggih + geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 30, hjust = 1)) 
+
+ggih1 + xlab("Income") + ylab("Proportion having tried heroine")
+```
+
+```{r, include=FALSE}
+#table with heroin use by income and race,i think
+race_inc_her <- aggregate(x = df2$HEREVER, by = list(df2$INCOME,df2$NEWRACE2), data = df2, mean)
+race_inc_her
+
+gg_r_i <- ggplot(df2_ri1) + aes(INCOME, race_per) + geom_bar(stat="identity") + theme(axis.text.x = element_text(angle = 30, hjust = 1)) + xlab("Income") + ylab("Proportion having tried heroine") + facet_wrap(~NEWRACE2)
+
+gg_r_i
+
+
+```
+
+```{r, include=FALSE}
+#look into sample size
+NonHispPA <- df2 %>% filter(NEWRACE2 == "(4) NonHisp Native HI/Other Pac Isl")
+#look into NAs for categorical/ factor variables
+summary(df2$IRMARIT)
+summary(df2$HERYRTOT)
+herprop <- mean(df2$HEREVER)
+ssize <- nrow(df2)
+herprop * ssize
+
+summary(df2$NEWRACE2)
+#interesting, (299 / 55270) * 100 = 0.5% = proportion who are (4) for race. wiki (census) says 0.1%. probably not a big deal, but difficult to slice and dice 299 people either way
+
+qplot(INCOME, geom = "bar", data = NonHispPA)
+
+```
+```{r, include=FALSE}
+#trying to run regs
+
+qplot(HERYRTOT, geom = "density", data = df2)
+
+lm(HERYRTOT ~ NEWRACE2, data = df2)
+
+lm1 <- lm(HERYRTOT ~ NEWRACE2, data = df2)
+lm1
+
+logistic1 <- glm(HEREVER ~ NEWRACE2, data = df2, family = binomial, na.action = na.exclude)
+logistic1
+
+logistic2 <- glm(HEREVER ~ NEWRACE2 + INCOME, data = df2, family = binomial)
+logistic2
+
+lm2 <- lm(HEREVER ~ NEWRACE2 + INCOME, data = df2)
+lm2
+```
