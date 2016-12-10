@@ -1,10 +1,9 @@
 **Contributors:**
 
 Nancy Stetson
-
 Cassandra Bayer
 
-**Overview:**
+# **Overview:**
 
 This is a final project for the UC Berkeley Fall 2016 classes Urban Infomatics and Data Science in Public Policy. For this project we explore the trade-offs between rents and commutes in the Bay Area of California. We use three main sources of data. The first is a dataset of craigslist postings collected by the [Urban Analytics Lab](http://ual.berkeley.edu/) in 2014 (primary contract: [Geoff Beoing](http://geoffboeing.com/)). We combined these listings with commute data, using a simulated dataset of commute destinations from the [Metropolitan Transportation Committee](http://mtc.ca.gov/). To find commute times, we made requests from the [Google Directions API](https://developers.google.com/maps/documentation/directions/).
 
@@ -12,7 +11,7 @@ The bulk of this project was organizing and aggregating the commute destinations
 
 We find that there are small pockets of low rent, low commute neighborhoods. We estimate a time cost of commuting of approximately $20 per additional one way minute per month. Using regression, the commute cost appears to be higher, around $40 per minute per month, however the results were not conclusive and unstable depending on covariates. 
 
-**Software:**
+# **Software:**
 
 Python, version 2.7, Anaconda distribution
 
@@ -24,11 +23,11 @@ Rstudio
 
 [Carto.com](http://carto.com)
 
-**Code:**
+# **Code:**
 
 **(01)clean_rent_data.Rmd**
 
-	Removes listings without latitude and longitude.
+Removes listings without latitude and longitude.
 
 **(02) Zones_and_SuperDistricts.ipynb**
 
@@ -60,15 +59,16 @@ Creates a new shapefile (*MergedZoneShp*) that adds the new attributes (commute 
 
 **(09)Histograms.ipynb**
 
-	Creates histograms for slide 6 in presentation.
+Creates histograms for slide 6 in presentation.
 
 **(10)Presentation.Rmd**
 
-	Presentation of results. 
+Presentation of results. 
 
-**Data:**
 
-Shapefiles
+# **Data:**
+
+### Shapefiles
 
 * **Original zone shapefile** (OriginalZoneShp folder)
 
@@ -86,7 +86,7 @@ Shapefiles
 
     * Contains: Original zone shapefile merged with commute and rent data
 
-Datasets
+### Datasets
 
 * **sfbay.csv **
 
