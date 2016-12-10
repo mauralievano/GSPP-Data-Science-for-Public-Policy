@@ -1,35 +1,31 @@
-This is where our read me will go! :)
-Hello world!
-<insert more silly coder lingo>
+READ ME 
 
 Overview
+This project used raw results from The National Survey on Drug Use and Health, 2014 
+ to create predictive models for heroin use in the united states. With an increasing cost of the heroin epidemic throughout America in lives lost and monetary damage as a result of crime and healthcare costs, it is essential to be able to predict and provide help for those suffering from heroin and opioid pain reliever addictions.  
 
-Code
-
-Presentation
--> Our presentation comes straight from our code, via an ioslides presentation
-
+The code used for this project begins with data cleaning of the 2014 NSUDH for use as well as focus on key variables related to heroin use. Following this code descriptive summary statistics and graphs are represented to identify possible relationships with the key variables. Afterwards, different prediction techniques are modeled. These techniques include random forests, linear regression, logit repression, and tree models. 
 
 
-Instructions/ template:
-Overview
-Give a short, 1-2 paragraph description of your project. Focus on (1) the code – rather than the theoretical / substantive / academic side of things; and (2) the key results.List all the software dependencies in your code, as well as version numbers, e.g.:
-1. R, version 3.1 2. Python 2.7, Anaconda distribution (In your code itself, include commented commands that install required packages.) Then list all other files contained in the repo, along with a brief description of each one, e.g.:
+Software dependencies.
+1.	R, version 3.2.5
+2.	RStudio 3.3.2
 
 Data
-1. polity.csv: The PolityVI dataset, available
-here: http://www.systemicpeace.org/inscrdata.html2. nyt.csv: Contains data from the New York Times API collected via collect-nyt.ipynb . Includes information on all articles containing the term "Programmer Cat", 1980-2010. 3. analysis-dataset.csv: The final Analysis Dataset derived from the raw data above. It includes country-year values for all UN countries 1980-2010, with observations for the following variables:
-o ccode: Correlates of War numeric code for country observation
-o year: Year of observation o polity: PolityVI score o nyt: Number of New York Times articles about "Programmer Cat" o 
-For the section data, make sure that your files have a descriptive and intuitive name.
+1.	raw_data.rda: The National Survey on Drug Use and Health, 2014, available here: http://www.icpsr.umich.edu/icpsrweb/NAHDAP/studies/36361
+
+2.	analysis_dataset.rda: The final Analysis Dataset derived from the raw data above. It includes variables drawn from a survey of 55,271 people on heroin and non-prescription pain killer use as well as demographics such as gender, income, race, etc.:
 
 Code
-1. 01_collect-nyt.py: Collects data from New York Times API and exports data to
-the file nyt.csv 2. 02_merge-data.R: Loads, cleans, and merges the raw Polity and NYT datasets into the Analysis Dataset. 3. 03_analysis.R: Conducts descriptive analysis of the data, producing the tables and visualizations found in the Results directory.
+All code comes from FinalRMD.rmd
+1.	# Section 1: Cleans the large data file and turns it into the analysis-dataset.rda
+2.	# Section 2: Presents summary statistics and graphical representation of relationships between heroin use and variables in the data. 
+3.	# Section 3: Examines different predictive models such as random forests, trees, linear, and logit regressions.  
 
 Presentation
-1. coverage-over-time.jpeg: Graphs the number of articles about each region over
-time. 2. regression-table.txt: Summarizes the results of OLS regression, modelling nyt on a number of covariates.
+1.	http://rpubs.com/noahjlehman/234368: A slideshow presentation which presents the visualizations of our summary statistics and models. 
 
 More Information
-Include any other details you think your user might need to reproduce your results. You may also include other information such as your contact information, credits, etc.
+Feel free to contact Noah Lehman or Dan Willis to ask about this project.
+Noah Lehman: noahjlehman@berkeley.edu
+Dan Willis: danwillis@berkeley.edu 
