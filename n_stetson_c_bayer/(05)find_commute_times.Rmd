@@ -1,0 +1,82 @@
+---
+title: "Commute time iteration"
+output: html_document
+---
+
+```{r}
+#install.packages('tidyverse')
+#install.packages('gmapsdistance')
+
+library(tidyverse)
+library(gmapsdistance)
+```
+
+```{r}
+
+# Get an API Key for Google Directions
+# Note: 2,500 free requests per day
+# Subsequently, 50 cents/1,000 requests
+APIkey = ''
+
+arrival <- 1481734800
+# from: http://www.epochconverter.com/
+# built in R dates didn't seem to put it in the right time zone
+
+commute <- read_csv('zone_to_super.csv')
+commute <- arrange(commute, desc(n))
+```
+
+
+```{r}
+# Note: Due to API restrictions and speed (about 2 requests per second)
+# this step can be split. 
+# For example, run commute[1:1000,], then commute[1001:2000,] etc, 
+# and bind the data frames at the end. 
+commute_ <- commute[1:13899,]
+#13899
+
+# Optimistic Driving Time
+opt <- gmapsdistance(origin = commute_$home_loc,
+          destination = commute_$dest_loc,
+          mode = "driving",
+          arrival = arrival, 
+          traffic_model = "optimistic",
+          combinations = "pairwise" ,
+          key=APIkey)
+
+# Pessimistic Driving Time
+pes <- gmapsdistance(origin = commute_$home_loc,
+          destination = commute_$dest_loc,
+          mode = "driving",
+          arrival = arrival, 
+          traffic_model = "pessimistic",
+          combinations = "pairwise" ,
+          key=APIkey)
+
+# Public Transit Time
+transit <- gmapsdistance(origin = commute_$home_loc,
+          destination = commute_$dest_loc,
+          mode = "transit",
+          arrival = arrival,
+          combinations = "pairwise" ,
+          key=APIkey)
+
+# Change to data frame
+dest_opt <- as.data.frame(opt$Time) 
+dest_pes <- as.data.frame(pes$Time)
+dest_transit <- as.data.frame(transit$Time)
+
+names(dest_opt)[names(dest_opt) == 'Time'] <- 'opt_time'
+names(dest_pes)[names(dest_pes) == 'Time'] <- 'pes_time'
+names(dest_transit)[names(dest_transit) == 'Time'] <- 'transit_time'
+
+dest <- merge(dest_opt, dest_pes, by = c('or', 'de'))
+dest2 <- merge(dest, dest_transit, by= c("or", 'de'))
+
+commute_time <- merge(commute_, dest2, by.x=c("home_loc", "dest_loc"), by.y=c("or", "de"))
+
+write_csv(commute_time, 'commute_times.csv')
+
+```
+
+

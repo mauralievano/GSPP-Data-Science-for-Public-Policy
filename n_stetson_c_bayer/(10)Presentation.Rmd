@@ -1,0 +1,167 @@
+---
+title: "Renting and Commuting in the Bay Area"
+author: Cassandra Bayer and Nancy Stetson
+output: slidy_presentation
+
+---
+##
+```{r,  eval=TRUE, echo=FALSE, message=FALSE, error=FALSE, warning=FALSE, fig.align='center'}
+library(tidyverse)
+
+afford <- read_csv('afford.csv')
+cities3 <- afford %>% filter(RegionName=='New York, NY' | 
+                             RegionName == 'San Francisco, CA' |
+                             RegionName == 'Chicago, IL' |
+                             RegionName == 'Atlanta, GA')
+
+
+ggplot(cities3, aes(date, RentAffordability, color=RegionName)) +
+  geom_path(size=1) +
+  #geom_path(data= filter(cities3,RegionName=='San Francisco, CA'),
+             # aes(date, RentAffordability)) +
+  xlab("Year") + ylab("Income for Rent") +
+  ggtitle("Percent of Median Income Spent on Median Rent") +
+  scale_y_continuous(limits = c(0.15, 0.5), labels = scales::percent, breaks = seq(0,.5, .05)) +
+  scale_color_manual(values = c( 'lightblue2', 'lightblue3','lightblue4', 'firebrick'),
+                     guide = guide_legend(title = NULL)) +
+              theme_minimal() 
+
+```
+
+##
+<br>
+<center><strong><font size="6">The Questions</font></strong>
+<br>
+<br>
+<br>
+<font size="6">How does the ease of commuting affect rents? <br>
+<br>
+Are the rent savings from living far from the city center eroded by high commute costs? <br>
+<br>
+Are there areas of the Bay where rents are cheap and commutes are short?
+</font></center>
+
+
+##
+<center><strong><font size="6">The Set Up</font></strong>
+<br>
+<br>
+<iframe src="https://nstetson.carto.com/viz/7d6d491c-b0f8-11e6-9fb0-0e233c30368f/embed_map" width="80%" height="600" frameborder="0" align="middle"></iframe></center>
+
+##
+<center>
+<strong><font size="6">The Method</font></strong>
+<br>
+<iframe src="https://nstetson.carto.com/viz/0396f762-b7f8-11e6-b2d6-0ecd1babdde5/embed_map" width="80%" height="600" frameborder="0" align="middle"></iframe></center>
+
+
+##
+<center>
+<strong><font size="6">Commutes</font></strong>
+
+<img src="https://www.ocf.berkeley.edu/~cbayer/wp-content/uploads/2016/12/Commutes.png" style="width:40%;height:40%;"></center>
+
+##
+
+<center>
+<strong><font size="6">Commutes</font></strong>
+<br>
+<br>
+<iframe width="80%" height="600" frameborder="0" align="middle" src="https://nstetson.carto.com/viz/669dde52-bb2c-11e6-abb7-0e3ebc282e83/embed_map"></iframe></center>
+
+##
+<center>
+<strong><font size="6">Rents in the Bay</font></strong>
+<br>
+<iframe width="80%" height="600" frameborder="0" align="middle" src="https://nstetson.carto.com/viz/aaaf09e6-b8b5-11e6-92e6-0e233c30368f/embed_map"></iframe></center>
+
+
+##
+<center>
+<strong><font size="6">Rents in the Bay</font></strong>
+<br>
+<iframe width="80%" height="600" frameborder="0" align="middle" src="https://nstetson.carto.com/viz/a8b3cf36-55aa-4a90-91c5-d0607e3f4c8d/embed_map"></iframe></center>
+
+##
+<center>
+<strong><font size="6">Commute/Rent Index</font></strong>
+<br>
+<br>
+<iframe width="80%" height="600" frameborder="0" align="middle" src="https://nstetson.carto.com/viz/eff9bca2-bbfe-11e6-9ddd-0ecd1babdde5/embed_map"></iframe></center>
+
+##
+
+``````{r, eval=TRUE, echo=FALSE, message=FALSE, error=FALSE, warning=FALSE, fig.align='center'}
+
+rents <- read_csv('rents_with_commutes.csv')
+
+rents <- rents %>% 
+        filter(bedrooms < 5) %>%
+        mutate(bed_factor = as.factor(bedrooms))
+
+scatter_plot_new <- rents %>% 
+      ggplot(  aes(wtd_taz_commute, rent, color=bed_factor) )+ 
+  
+      geom_jitter(size = 1, aes(color= bed_factor), alpha = 0.5)+
+            
+        geom_smooth( method = lm, size = .8, color = 'navy', alpha = 0.2) +
+      xlab("Average Commute in Minutes") + 
+  ylab("Rent" ) + 
+      ggtitle("Rents Fall As Commutes Rise") +
+    scale_color_manual(values=c("#FF0000", "#00A08A", "#F2AD00", "#5BBCD6"),
+                         guide = guide_legend(title = 'Bedrooms')) +
+  scale_x_continuous(breaks= seq(0,180, 15)) +
+        theme_minimal()
+
+scatter_plot_new
+
+
+
+```
+
+
+##
+<center>
+<strong><font size="6">Regression Results</font></strong>
+
+<table style="text-align:center"><tr><td colspan="5" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"></td>
+<tr>
+<tr><td style="text-align:left"></td><td colspan="4">Rent</td></tr>
+<tr><td style="text-align:left"></td><td>(1)</td><td>(2)</td><td>(3)</td><td>(4)</td></tr>
+<tr><td colspan="5" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Driving Time</td><td>-7.88<sup>***</sup></td><td></td><td></td><td></td></tr>
+<tr><td style="text-align:left"></td><td>(0.86)</td><td></td><td></td><td></td></tr>
+<tr><td style="text-align:left"></td><td></td><td></td><td></td><td></td></tr>
+<tr><td style="text-align:left">Tranist Time</td><td></td><td>-19.35<sup>***</sup></td><td></td><td></td></tr>
+<tr><td style="text-align:left"></td><td></td><td>(0.16)</td><td></td><td></td></tr>
+<tr><td style="text-align:left"></td><td></td><td></td><td></td><td></td></tr>
+<tr><td style="text-align:left">Weighted Commute Time</td><td></td><td></td><td>-38.89<sup>***</sup></td><td>-81.63<sup>***</sup></td></tr>
+<tr><td style="text-align:left"></td><td></td><td></td><td>(0.46)</td><td>(1.72)</td></tr>
+<tr><td style="text-align:left"></td><td></td><td></td><td></td><td></td></tr>
+<tr><td style="text-align:left">Squared Weighted Commute Time</td><td></td><td></td><td></td><td>0.64<sup>***</sup></td></tr>
+<tr><td style="text-align:left"></td><td></td><td></td><td></td><td>(0.02)</td></tr>
+<tr><td style="text-align:left"></td><td></td><td></td><td></td><td></td></tr>
+<tr><td style="text-align:left">Bedrooms</td><td>610.90<sup>***</sup></td><td>675.61<sup>***</sup></td><td>653.82<sup>***</sup></td><td>655.27<sup>***</sup></td></tr>
+<tr><td style="text-align:left"></td><td>(3.93)</td><td>(3.67)</td><td>(3.80)</td><td>(3.79)</td></tr>
+<tr><td style="text-align:left"></td><td></td><td></td><td></td><td></td></tr>
+<tr><td style="text-align:left">Square Feet</td><td>0.01<sup>***</sup></td><td>0.01<sup>***</sup></td><td>0.01<sup>***</sup></td><td>0.01<sup>***</sup></td></tr>
+<tr><td style="text-align:left"></td><td>(0.001)</td><td>(0.001)</td><td>(0.001)</td><td>(0.001)</td></tr>
+<tr><td style="text-align:left"></td><td></td><td></td><td></td><td></td></tr>
+<tr><td style="text-align:left">Community of Concern Flag</td><td>-249.22<sup>***</sup></td><td>-502.28<sup>***</sup></td><td>-451.81<sup>***</sup></td><td>-482.01<sup>***</sup></td></tr>
+<tr><td style="text-align:left"></td><td>(10.54)</td><td>(9.73)</td><td>(10.19)</td><td>(10.22)</td></tr>
+<tr><td style="text-align:left"></td><td></td><td></td><td></td><td></td></tr>
+<tr><td style="text-align:left">Commuter Count</td><td>-0.13<sup>***</sup></td><td>-0.11<sup>***</sup></td><td>-0.12<sup>***</sup></td><td>-0.11<sup>***</sup></td></tr>
+<tr><td style="text-align:left"></td><td>(0.003)</td><td>(0.003)</td><td>(0.003)</td><td>(0.003)</td></tr>
+<tr><td style="text-align:left"></td><td></td><td></td><td></td><td></td></tr>
+<tr><td style="text-align:left">Constant</td><td>1,936.12<sup>***</sup></td><td>2,820.98<sup>***</sup></td><td>2,839.59<sup>***</sup></td><td>3,470.96<sup>***</sup></td></tr>
+<tr><td style="text-align:left"></td><td>(18.85)</td><td>(12.94)</td><td>(16.01)</td><td>(29.17)</td></tr>
+<tr><td style="text-align:left"></td><td></td><td></td><td></td><td></td></tr>
+<tr><td colspan="5" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Observations</td><td>86,393</td><td>86,393</td><td>86,393</td><td>86,393</td></tr>
+<tr><td style="text-align:left">Adjusted R<sup>2</sup></td><td>0.24</td><td>0.35</td><td>0.30</td><td>0.30</td></tr>
+<tr><td colspan="5" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"><em>Note:</em></td><td colspan="4" style="text-align:right"><sup>*</sup>p<0.1; <sup>**</sup>p<0.05; <sup>***</sup>p<0.01</td></tr>
+</table>
+
+##
+
+
+
+

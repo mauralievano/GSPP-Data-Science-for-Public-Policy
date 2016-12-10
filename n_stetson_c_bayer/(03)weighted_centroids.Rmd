@@ -1,0 +1,24 @@
+---
+title: "Weighted Centroids"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+```
+
+
+Make tables for zones and super districts with centroids weighted by where our rental locations are.
+```{r}
+rentals <- read_csv('rentals_with_tazIDs.csv')
+
+zone_Wcentroids <- rentals %>%
+                  group_by(taz_key) %>%
+                  summarise(mean_lat = mean(latitude), mean_lon= mean(longitude))
+
+superD_Wcentroids <- rentals %>%
+                  group_by(SUPERD) %>%
+                  summarise(mean_lat = mean(latitude), mean_lon= mean(longitude))
+
+write_csv(superD_Wcentroids, 'superD_Wcentroids.csv')
+write_csv(zone_Wcentroids, 'zone_Wcentroids.csv')
