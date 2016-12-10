@@ -1,3 +1,35 @@
 This is where our read me will go! :)
 Hello world!
+<insert more silly coder lingo>
 
+Overview
+
+Code
+
+Presentation
+-> Our presentation comes straight from our code, via a ioslides presentation
+
+
+
+Instructions/ template:
+Overview
+Give a short, 1-2 paragraph description of your project. Focus on (1) the code – rather than the theoretical / substantive / academic side of things; and (2) the key results.List all the software dependencies in your code, as well as version numbers, e.g.:
+1. R, version 3.1 2. Python 2.7, Anaconda distribution (In your code itself, include commented commands that install required packages.) Then list all other files contained in the repo, along with a brief description of each one, e.g.:
+
+Data
+1. polity.csv: The PolityVI dataset, available
+here: http://www.systemicpeace.org/inscrdata.html2. nyt.csv: Contains data from the New York Times API collected via collect-nyt.ipynb . Includes information on all articles containing the term "Programmer Cat", 1980-2010. 3. analysis-dataset.csv: The final Analysis Dataset derived from the raw data above. It includes country-year values for all UN countries 1980-2010, with observations for the following variables:
+o ccode: Correlates of War numeric code for country observation
+o year: Year of observation o polity: PolityVI score o nyt: Number of New York Times articles about "Programmer Cat" o 
+For the section data, make sure that your files have a descriptive and intuitive name.
+
+Code
+1. 01_collect-nyt.py: Collects data from New York Times API and exports data to
+the file nyt.csv 2. 02_merge-data.R: Loads, cleans, and merges the raw Polity and NYT datasets into the Analysis Dataset. 3. 03_analysis.R: Conducts descriptive analysis of the data, producing the tables and visualizations found in the Results directory.
+
+Presentation
+1. coverage-over-time.jpeg: Graphs the number of articles about each region over
+time. 2. regression-table.txt: Summarizes the results of OLS regression, modelling nyt on a number of covariates.
+
+More Information
+Include any other details you think your user might need to reproduce your results. You may also include other information such as your contact information, credits, etc.
