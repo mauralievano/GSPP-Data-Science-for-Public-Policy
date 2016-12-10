@@ -6,7 +6,7 @@ output: ioslides_presentation
 
   
 ---
-
+#Section 1
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
@@ -15,7 +15,7 @@ knitr::opts_chunk$set(echo = TRUE)
 #Examining Data
 set.seed(23984)
 
-
+#install.packages("tidyverse", "mice","labelled","boot","truncnorm","ggthemes","glmet", "tree", "randomForest")
 library(tidyverse)
 library(mice)
 library(labelled)
@@ -26,9 +26,10 @@ library(glmnet)
 library(tree)
 library(randomForest)
 #dan's path
-load("C:/Users/Daniel/Desktop/Fall 2016/DSPP/Data Science Final/36361-0001-Data.rda")
+#load("C:/Users/Daniel/Desktop/Fall 2016/DSPP/Data Science Final/36361-0001-Data.rda")
 
-#noah path load("C:/Users/noahj_000/Desktop/Data Science Final/ICPSR_36361/DS0001/36361-0001-Data.rda")
+#noah path 
+load("C:/Users/noahj_000/Desktop/Data Science Final/ICPSR_36361/DS0001/36361-0001-Data.rda")
 df_o <- da36361.0001
 rm(da36361.0001)
 #str(df_o)
@@ -124,16 +125,9 @@ df2$IRSEX <- as.factor(df2$IRSEX)
 
 
 df2$EDUCCAT2 <- recode(df2$EDUCCAT2, "(1) Less than high school (IREDUC2<=7 and AGE2>=7)" = "No Diploma", "(2) High school graduate (IREDUC2=8 and AGE2>=7)" = "HS Grad", "(3) Some college (IREDUC2=9-10 and AGE2>=7)" = "Some College", "(4) College graduate (IREDUC2=11 and AGE2>=7)" = "College Grad", "(5) 12 to 17 year olds (AGE2<=6)" = "Child" )
-
-
-
-
-
-#Fuck YEAH!
-anyNA(df2)
 ```
 
-
+#Section 2
 ```{r, include = FALSE}
 #Race + Income
 df2_ri1 <- df2 %>%
@@ -217,15 +211,12 @@ stargazer(anlever_reg, type = "html")
 pain_drugs_reg <- lm(HEREVER~DARVTYLC+ PERCTYLX+ VICOLOR+ CODEINE+ DEMEROL+ DILAUD+ FIORICET+ FIORINAL+ HYDROCOD+ METHDON+ MORPHINE+ OXYCONTN+ PHENCOD+ PROPOXY+ SK65A+ STADOL+ TALACEN+ TALWIN+ TALWINNX+ TRAMADOL+ ULTRAM+ ANLNOLST, data = df2)
 
 summary(pain_drugs_reg)
-
-
 ```
 
 
 ```{r, include = FALSE, results = 'asis'}
 
 stargazer(pain_drugs_reg, type = "html")
-
 ```
 
 
@@ -286,20 +277,19 @@ ggplot(df2_ri6) + aes(EDUCCAT2, race_per) +
 
 ```
 
-
+#section 3
 ```{r rf setup, include=FALSE}
-
 x <- df2 %>% select(-c(HEREVER, HERYRTOT, HERREC, CASEID, QUESTID2))
 y <- as.factor(df2$HEREVER)
 #model_rf <- randomForest(x = x, y = y, importance = TRUE)
 
 #save(model_rf, file = "model_rf.RData")
 
+#Dan's
+#load("C:/Users/Daniel/Desktop/Fall 2016/DSPP/Data Science Final/model_rf.RData")
 
-load("C:/Users/Daniel/Desktop/Fall 2016/DSPP/Data Science Final/model_rf.RData")
-# Table of variable importance
-importance(model_rf)
-
+#Noah's
+load("C:/Users/noahj_000/Desktop/Data Science Final/DS Final/model_rf.RData")
 ```
 
 ##<large>Random Forest
@@ -310,6 +300,8 @@ varImpPlot(model_rf, n.var = 19, main = "Variable Importance Plot\n(top 19 only)
            type = 1, cex = .8, pt.cex = 1.75, pch = 15) 
 
 ```
+
+#our presentation ended here; below are draft/ exploratory stuff we excluded from the final product.
 
 ```{r, include = FALSE}
 library(rpart)
