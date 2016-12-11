@@ -1,0 +1,1009 @@
+---
+title: 'Law and Order: OPD'
+author: "Gita DeVaney & T. Woody Kongsamut"
+date: "December 8, 2016"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r, echo = FALSE, include = FALSE}
+# install.packages(tidyverse)
+# install.packages(lubridate)
+# install.packages(stringr)
+# install.packages(modelr)
+# install.packages(broom)
+# install.packages(MASS)
+# install.packages(glmnet)
+# install.package(ROCR)
+# install.packages(randomForest)
+# install.packages(RColorBrewer)
+
+library(tidyverse)
+library(lubridate)
+library(stringr)
+library(modelr)
+library(broom)
+```
+
+```{r Calculate RMSE by hand, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+# Function to calculate RMSE
+rmse_by_hand <- function(this_model, x_holdout, y_holdout){
+  this_pred <- predict(this_model, newx = x_holdout)
+  sqrt(mean((this_pred - y_holdout)^2))
+}
+```
+
+```{r Load and merge OPD dispatch and response data, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+
+## Read and clean dispatcher data
+
+# Set folder path
+ setwd("/Users/gdevaney/Dropbox/Final Project/Police responses") # Gita's computer
+# setwd("C:/Users/Woody/Dropbox/GSPP/2016 Fall/Data Science/Final Project/Police responses") # Woody's computer
+# Read in raw disaptcher data
+dispatch_2014 <- read_csv("Events_2014.csv")
+# Rename columns
+colnames(dispatch_2014) <- c("EVENTNUMBER", "DATETIME", "LOCATION", "POLICEBEAT", "CRIMETYPE", "DESCRIPTION", "PRIORITY")
+
+
+## Read and clean police encounters data
+
+# Set folder path
+ setwd("/Users/gdevaney/Dropbox/Final Project") # Gita's computer
+# setwd("C:/Users/Woody/Dropbox/GSPP/2016 Fall/Data Science/Final Project") # Woody's computer
+
+# Read in raw data
+encounters <- read.csv("Encounter data - Jan_2014_To_May_2015.csv")
+# Adjust column names (for merging)
+colnames(encounters)[2] <- "EVENTNUMBER"
+encounters$EVENTNUMBER <- as.factor(encounters$EVENTNUMBER)
+# Clean up dates
+encounters$ContactDate <- mdy(str_sub(encounters$ContactDate, 1, 10))
+# Subset to 2014 only
+encounters_2014 <- encounters %>% filter(year(encounters$ContactDate)==2014)
+
+
+## Merge dispatch and encounter data
+
+df <- left_join(dispatch_2014, encounters_2014, by="EVENTNUMBER")
+
+# Read in dispatch description codes (done separately in Stata) and clean new data.frame
+desc_codes <- read.csv("Description codes.csv") %>% 
+  select(INCIDENT.TYPE, CATEGORY)
+colnames(desc_codes) <- c("CRIMETYPE", "IncidentCategory")
+
+df <- left_join(df, desc_codes, by="CRIMETYPE")
+```
+
+```{r Clean merged data, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+
+# Create dummy variable for whether there is a case created for a given response
+df$CaseDummy <- df$CaseNumber != ""
+# Create dummy variable for whether there is a citation created for a given response
+df$CitationDummy <- df$CitationNumber != ""
+
+# Create new date and time vars
+df$ContactWeekday <- weekdays(df$ContactDate)
+df$ContactMonth <- month(df$ContactDate,label=TRUE, abbr=TRUE)
+df$ContactTime <- ifelse(str_length(df$ContactTime)==1,
+                         paste0("000", df$ContactTime),
+                         ifelse(str_length(df$ContactTime)==2,
+                         paste0("00", df$ContactTime),
+                         ifelse(str_length(df$ContactTime)==3,
+                         paste0("0", df$ContactTime),
+                         ifelse(str_length(df$ContactTime)==7, "0000",
+                         df$ContactTime))))
+df$ContactTime <- hm(paste(str_sub(df$ContactDate, 1, 2),
+                              str_sub(df$ContactTime, 3, 4), sep=":"))
+
+# df$ContactTime_len <- str_length(df$ContactTime)
+# table(df$ContactTime_len)
+
+df$DATETIME <- mdy_hm(df$DATETIME)
+df$DispatchWeekday <- weekdays(df$DATETIME)
+df$DispatchMonth <- month(df$DATETIME, label=TRUE,abbr=TRUE)
+df$DispatchTime <- hm(paste(hour(df$DATETIME), minute(df$DATETIME), sep=":"))
+
+# Check police beat
+# df$beatcheck <- df$POLICEBEAT!="" & df$Beat!="" & df$POLICEBEAT!=df$Beat
+# beatcheck <- df %>% filter(beatcheck==1)
+# POLICEBEAT <> Beat for 2,986 obs
+
+# Combine X and Y beats of the same number (to reduce number of factors for prediction models)
+df$POLICEBEAT <- as.character(str_replace_all(str_replace_all(str_replace_all(df$POLICEBEAT, "X",""), "Y", ""), "Z", ""))
+
+df$Beat <- as.character(str_replace_all(str_replace_all(str_replace_all(df$Beat, "X",""), "Y", ""), "Z", ""))
+
+
+# Clean string vars
+df$ReasonForEncounter <- str_replace(df$ReasonForEncounter, ",", "")
+df$ResultOfEncounter <- str_replace(df$ResultOfEncounter, ",", "")
+df$ResultOfEncounter <- str_replace(df$ResultOfEncounter, 
+                                    "FI ReportFI Report,", "FI Report")
+df$ResultOfEncounter <- str_replace(df$ResultOfEncounter, 
+                                "Report Taken-No ActionReport Taken-No Action,",
+                                "Report Taken-No Action")
+df$TypeOfSearch <- str_replace(df$TypeOfSearch, ",", "")
+
+# Create dummy variables for ResultofSearch
+df$Found_Firearms <- str_detect(df$ResultOfSearch, "Firearms")
+df$Found_Narcotics <- str_detect(df$ResultOfSearch, "Narcotics")
+df$Found_OtherEvidence <- str_detect(df$ResultOfSearch, "Other Evidence")
+# df$Found_OtherWeapons <- str_detect(df$ResultOfSearch, "Other Weapons")
+df$Found_None <- df$ResultOfSearch=="None,"
+
+# checkdates <- df_full %>% filter(date(DATETIME)!=ContactDate) %>%
+#  select(DATETIME, ContactDate, ContactTime)
+
+
+# Remove old data.frames
+rm(desc_codes, dispatch_2014, encounters, encounters_2014)
+```
+
+```{r Create new data.frame for Search results only, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+# Subset dataset for prediction models on OPD results of search
+searched <- df %>% filter(SearchConducted=="Yes") %>%
+                 select(EVENTNUMBER,
+                    POLICEBEAT,
+                    PRIORITY,
+                    Beat,
+                    ContactTime,
+                    #DurationOfEncounter,
+                    EncounterType,
+                    RaceKnown,
+                    ReasonForEncounter,
+                    #ResultOfEncounter, 
+                    AgeGroup, 
+                    #Handcuffed, 
+                    OaklandResident, 
+                    SDRace,
+                    #SearchConducted,
+                    Sex,
+                    #TypeOfSearch,
+                    IncidentCategory,
+                    #CaseDummy,
+                    #CitationDummy,
+                    #ContactWeekday,
+                    #ContactMonth,
+                    DispatchWeekday,
+                    DispatchMonth,
+                    DispatchTime,
+                    Found_Firearms,
+                    Found_Narcotics,
+                    Found_OtherEvidence,
+                    #Found_OtherWeapons,
+                    Found_None)
+# Rename columns
+colnames(searched)[2] <- "DispatchBeat"
+colnames(searched)[3] <- "DispatchPriority"
+colnames(searched)[4] <- "EncounterBeat"
+
+```
+
+```{r Set up data for Found_Firearms result of search, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+
+# Drop other "Found" variables for modeling Found_Firearms because they will be perfectly predictive of the outcome.
+
+searched$SingleBeat <- searched$EncounterBeat
+searched$SingleBeat[is.na(searched$SingleBeat)] <- searched$DispatchBeat
+
+search_firearms <- searched %>% 
+             dplyr::select(SingleBeat,
+                    DispatchPriority,
+                    EncounterType,
+                    RaceKnown,
+                    ReasonForEncounter,
+                    AgeGroup, 
+                    OaklandResident, 
+                    SDRace,
+                    Sex,
+                    IncidentCategory,
+                    DispatchWeekday,
+                    DispatchMonth,
+                    DispatchTime,
+                    Found_Firearms)
+                    
+# Divide data into training and test set
+set.seed(2607)
+partition <- resample_partition(search_firearms, c(test = 0.3, train = 0.7))
+
+# Separate into separate data frames
+search_firearms_train <- as_tibble(partition$train)
+search_firearms_test <- as_tibble(partition$test)
+
+# Complete case analysis (drop all NA)
+# NOTE!!! For some reason, this needs to happen after the data is subsetted... Weird quirk.
+search_firearms_train <-  drop_na(search_firearms_train)
+search_firearms_test <- drop_na(search_firearms_test)
+
+# Found Firearms
+# x_training is a matrix of variables ready for regression (the [,-1] just removes the Found_Firearms column)
+firearms_x_training <- model.matrix(Found_Firearms ~ ., search_firearms_train)[,-1]
+# y_training is the column of Found_Firearms values corresponding to x_training
+firearms_y_training <- as.numeric(search_firearms_train$Found_Firearms)
+
+# Set up the holdout sample the same way.
+firearms_x_holdout <- model.matrix(Found_Firearms ~ ., search_firearms_test)[,-1]
+firearms_y_holdout <- as.numeric(search_firearms_test$Found_Firearms)
+```
+
+```{r Firearms models - Linear & Logit, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+# Load useful libraries
+library(MASS)
+library(glmnet)
+
+# Linear model
+mod_linear <- lm(Found_Firearms ~ ., data = search_firearms_train)
+
+# Logistic model
+mod_logit <- glm(Found_Firearms ~ ., data = search_firearms_train, family = binomial)
+
+rmse(mod_linear, data = search_firearms_test)
+rmse(mod_logit, data = search_firearms_test)
+```
+
+```{r Firearms - Linear & Logit Model Assessment in training data, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+# ------------- IN-SAMPLE TESTS -----------------------
+
+# Predicted values
+search_firearms_train$predict_linear <- round(predict(mod_linear), 1)
+search_firearms_train$predict_logit <- round(predict(mod_logit, type = "response"), 1)
+
+# Calibration
+cal_train_logit <- search_firearms_train %>% group_by(predict_logit) %>%
+             summarize(freq = mean(Found_Firearms), count = n())
+cal_train_logit
+
+cal_train_linear <- search_firearms_train %>% group_by(predict_linear) %>%
+             summarize(freq = mean(Found_Firearms), count = n())
+cal_train_linear
+
+# Calibration plot
+cal_plot_train <- ggplot() + 
+  geom_abline(col = 2) + 
+  geom_point(data= cal_train_linear, aes(x = predict_linear, y = freq, size=count), color="green", alpha=0.5) + 
+    geom_point(data= cal_train_logit, aes(x = predict_logit, y = freq, size=count), alpha=0.5) + 
+  xlim(0,1) + ylim(0,1) + theme_minimal() +
+  labs(x = "Predict Found Firearms", y = "Average Firearm Discovery") + 
+  ggtitle("Calibration Plot - Linear vs. Logit Regression\n(In-Sample Test)")
+
+# Accuracy
+search_firearms_train <- search_firearms_train %>%
+  mutate(logit_firearms = as.numeric(predict_logit > 0.25),
+         linear_firearms = as.numeric(predict_linear > 0.25))
+acc_train_linear <- mean(search_firearms_train$Found_Firearms ==
+                          search_firearms_train$linear_firearms)
+acc_train_logit <- mean(search_firearms_train$Found_Firearms ==
+                          search_firearms_train$logit_firearms)
+round(acc_train_linear, 3)
+round(acc_train_logit, 3)
+
+# Precision
+prec_train_linear <- mean(search_firearms_train$Found_Firearms
+                         [search_firearms_train$linear_firearms == 1])
+prec_train_logit <- mean(search_firearms_train$Found_Firearms
+                        [search_firearms_train$logit_firearms == 1])
+
+round(prec_train_linear, 3)
+round(prec_train_logit, 3)
+
+# Sensitivity / Recall / True Positive Rate
+sens_train_linear <- mean(search_firearms_train$linear_firearms
+                           [search_firearms_train$Found_Firearms == 1])
+sens_train_logit <- mean(search_firearms_train$logit_firearms
+                           [search_firearms_train$Found_Firearms == 1])
+
+round(sens_train_linear, 3)
+round(sens_train_logit, 3)
+
+# Specificity
+spec_train_linear <- mean(search_firearms_train$linear_firearms
+                           [search_firearms_train$Found_Firearms == 0] == 0)
+spec_train_logit <- mean(search_firearms_train$logit_firearms
+                           [search_firearms_train$Found_Firearms == 0] == 0)
+
+round(spec_train_linear, 3)
+round(spec_train_logit, 3)
+
+# ROC Curve
+library(ROCR)
+pred_train_linear <- prediction(search_firearms_train$predict_linear,
+                          search_firearms_train$Found_Firearms)
+perf_train_linear <- performance(pred_train_linear, measure = "tpr", x.measure = "fpr")
+pred_train_logit <- prediction(search_firearms_train$predict_logit,
+                          search_firearms_train$Found_Firearms)
+perf_train_logit <- performance(pred_train_logit, measure = "tpr", x.measure = "fpr")
+plot(perf_train_linear)
+abline(0,1,lty = 2)
+plot(perf_train_logit)
+abline(0,1,lty = 2)
+
+# Calculate AUC
+auc_train_linear <- performance(pred_train_linear, measure = "auc")@y.values[[1]]
+auc_train_logit <- performance(pred_train_logit, measure = "auc")@y.values[[1]]
+
+```
+
+```{r Firearms - Linear & Logit Model Assessment in test data (CV), include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+# -------------OUT OF SAMPLE TESTS--------------
+  
+# Predicted values in test set
+search_firearms_test$predict_linear <- round(predict(mod_linear, 
+                                                 newdata = search_firearms_test), 3)
+
+search_firearms_test$predict_logit <- round(predict(mod_logit, type = "response",
+                                                newdata = search_firearms_test), 3)
+
+# Calibration
+cal_test_logit <- search_firearms_test %>% group_by(predict_logit) %>%
+             summarize(freq = mean(Found_Firearms), count = n())
+cal_test_logit
+
+cal_test_linear <- search_firearms_test %>% group_by(predict_linear) %>%
+             summarize(freq = mean(Found_Firearms), count = n())
+cal_test_linear
+
+# Calibration plot
+cal_plot_test <- ggplot() + 
+  geom_abline(col = 2) + 
+  geom_point(data = cal_test_linear, aes(x = predict_linear, y = freq, size=count), color="green", alpha=0.5) + 
+    geom_point(data = cal_test_logit, aes(x = predict_logit, y = freq, size=count), alpha=0.5) + 
+  xlim(0,1) + ylim(0,1) + theme_minimal() +
+  labs(x = "Predict Found Firearms", y = "Average Firearm Discovery") + 
+  ggtitle("Calibration Plot - Linear vs. Logit Regression\n(Out-of-Sample Test)")
+
+# Accuracy
+search_firearms_test <- search_firearms_test %>%
+  mutate(logit_firearms = as.numeric(predict_logit > 0.25),
+         linear_firearms = as.numeric(predict_linear > 0.25))
+acc_test_linear <- mean(search_firearms_test$Found_Firearms ==
+                          search_firearms_test$linear_firearms)
+acc_test_logit <- mean(search_firearms_test$Found_Firearms ==
+                          search_firearms_test$logit_firearms)
+round(acc_test_linear, 3)
+round(acc_test_logit, 3)
+
+# Precision
+prec_test_linear <- mean(search_firearms_test$Found_Firearms
+                         [search_firearms_test$linear_firearms == 1])
+prec_test_logit <- mean(search_firearms_test$Found_Firearms
+                        [search_firearms_test$logit_firearms == 1])
+
+round(prec_test_linear, 3)
+round(prec_test_logit, 3)
+
+# Sensitivity / Recall / True Positive Rate
+sens_test_linear <- mean(search_firearms_test$linear_firearms
+                           [search_firearms_test$Found_Firearms == 1])
+sens_test_logit <- mean(search_firearms_test$logit_firearms
+                           [search_firearms_test$Found_Firearms == 1])
+
+round(sens_test_linear, 3)
+round(sens_test_logit, 3)
+
+# Specificity
+spec_test_linear <- mean(search_firearms_test$linear_firearms
+                           [search_firearms_test$Found_Firearms == 0] == 0)
+spec_test_logit <- mean(search_firearms_test$logit_firearms
+                           [search_firearms_test$Found_Firearms == 0] == 0)
+
+round(spec_test_linear, 3)
+round(spec_test_logit, 3)
+
+# ROC Curve
+library(ROCR)
+pred_test_linear <- prediction(search_firearms_test$predict_linear,
+                          search_firearms_test$Found_Firearms)
+perf_test_linear <- performance(pred_test_linear, measure = "tpr", x.measure = "fpr")
+pred_test_logit <- prediction(search_firearms_test$predict_logit,
+                          search_firearms_test$Found_Firearms)
+perf_test_logit <- performance(pred_test_logit, measure = "tpr", x.measure = "fpr")
+plot(perf_test_linear)
+abline(0,1,lty = 2)
+plot(perf_test_logit)
+abline(0,1,lty = 2)
+
+# Calculate AUC
+auc_test_linear <- performance(pred_test_linear, measure = "auc")@y.values[[1]]
+auc_test_logit <- performance(pred_test_logit, measure = "auc")@y.values[[1]]
+
+```
+
+```{r Firearms - Ridge, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+# cv.glmnet does cross validation (default is k = 10) automatically. Alpha = 0 specifies Ridge.
+mod_ridge <- cv.glmnet(x = firearms_x_training, y = firearms_y_training, alpha = 0)
+
+# Plot output
+plot(mod_ridge)
+
+# Calculate coefficients at optimal lambda
+predict(mod_ridge, "coefficients", newx = firearms_x_training, s = "lambda.1se")[,1]
+
+# Re-fit model at optimal
+mod_ridge_opt <- glmnet(x = firearms_x_training, 
+                        y = firearms_y_training, 
+                        alpha = 0, lambda = mod_ridge$lambda.1se)
+
+# Calculate RMSE
+rmse_by_hand(mod_ridge_opt, firearms_x_holdout, firearms_y_holdout)
+
+```
+
+```{r Firearms - LASSO, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+# cv.glmnet does cross validation (default is k = 10) automatically. Alpha = 1 specifies LASSO.
+mod_lasso <- cv.glmnet(x = firearms_x_training, y = firearms_y_training, alpha = 1)
+
+# Plot output
+plot(mod_lasso)
+
+# Calculate coefficients at optimal lambda
+predict(mod_lasso, "coefficients", newx = firearms_x_training, s = "lambda.1se")[,1]
+
+# Re-fit model at optimal
+mod_lasso_opt <- glmnet(x = firearms_x_training, 
+                        y = firearms_y_training, 
+                        alpha = 1, lambda = mod_lasso$lambda.1se)
+
+# Calculate RMSE for Lasso
+rmse_by_hand(mod_lasso_opt, firearms_x_holdout, firearms_y_holdout)
+
+```
+
+```{r Firearms - Random Forests, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+library(randomForest)
+
+# fit a random forest model
+mod_rf <- randomForest(x = firearms_x_training,
+                       y = firearms_y_training,
+                       importance = TRUE, ntree=100)
+mod_rf
+
+# Table of variable importance
+importance(mod_rf)
+
+# Plot of variable importance
+VIP <- varImpPlot(mod_rf, n.var = 10, main = "Variable Importance Plot\n(top 10 only)",
+           type = 1, cex = 1.5, pt.cex = 1.5, pch = 16)
+VIP
+```
+
+
+```{r Set up data for Found_Narcotics result of search, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+
+# Drop other "Found" variables for modeling Found_Narcotics because they will be perfectly predictive of the outcome.
+
+searched$SingleBeat <- searched$EncounterBeat
+searched$SingleBeat[is.na(searched$SingleBeat)] <- searched$DispatchBeat
+
+search_narcs <- searched %>% 
+             dplyr::select(SingleBeat,
+                    DispatchPriority,
+                    EncounterType,
+                    RaceKnown,
+                    ReasonForEncounter,
+                    AgeGroup, 
+                    OaklandResident, 
+                    SDRace,
+                    Sex,
+                    IncidentCategory,
+                    DispatchWeekday,
+                    DispatchMonth,
+                    DispatchTime,
+                    Found_Narcotics)
+                    
+# Divide data into training and test set
+set.seed(2607)
+partition_narcs <- resample_partition(search_narcs, c(test = 0.3, train = 0.7))
+
+# Separate into separate data frames
+search_narcs_train <- as_tibble(partition_narcs$train)
+search_narcs_test <- as_tibble(partition_narcs$test)
+
+# Complete case analysis (drop all NA)
+# NOTE!!! For some reason, this needs to happen after the data is subsetted... Weird quirk.
+search_narcs_train <-  drop_na(search_narcs_train)
+search_narcs_test <- drop_na(search_narcs_test)
+
+# Found narcs
+# x_training is a matrix of variables ready for regression (the [,-1] just removes the Found_Narcotics column)
+narcs_x_training <- model.matrix(Found_Narcotics ~ ., search_narcs_train)[,-1]
+# y_training is the column of Found_Narcotics values corresponding to x_training
+narcs_y_training <- as.numeric(search_narcs_train$Found_Narcotics)
+
+# Set up the holdout sample the same way.
+narcs_x_holdout <- model.matrix(Found_Narcotics ~ ., search_narcs_test)[,-1]
+narcs_y_holdout <- as.numeric(search_narcs_test$Found_Narcotics)
+```
+
+```{r Narcotics models - Linear & Logit, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+# Load useful libraries
+library(MASS)
+library(glmnet)
+
+# Linear model
+mod_narcs_linear <- lm(Found_Narcotics ~ ., data = search_narcs_train)
+
+# Logistic model
+mod_narcs_logit <- glm(Found_Narcotics ~ ., data = search_narcs_train, family = binomial)
+
+rmse(mod_narcs_linear, data = search_narcs_test)
+rmse(mod_narcs_logit, data = search_narcs_test)
+```
+
+```{r Narcotics - Linear & Logit Model Assessment in training data, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+# ------------- IN-SAMPLE TESTS -----------------------
+
+# Predicted values
+search_narcs_train$predict_linear <- round(predict(mod_narcs_linear), 1)
+search_narcs_train$predict_logit <- round(predict(mod_narcs_logit, type = "response"), 1)
+
+# Calibration
+cal_narcs_train_logit <- search_narcs_train %>% group_by(predict_logit) %>%
+             summarize(freq = mean(Found_Narcotics), count = n())
+cal_narcs_train_logit
+
+cal_narcs_train_linear <- search_narcs_train %>% group_by(predict_linear) %>%
+             summarize(freq = mean(Found_Narcotics), count = n())
+cal_narcs_train_linear
+
+# Calibration plot
+cal_narcs_plot_train <- ggplot() + 
+  geom_abline(col = 2) + 
+  geom_point(data= cal_narcs_train_linear, aes(x = predict_linear, y = freq, size=count), color="green", alpha=0.5) + 
+    geom_point(data= cal_narcs_train_logit, aes(x = predict_logit, y = freq, size=count), alpha=0.5) + 
+  xlim(0,1) + ylim(0,1) + theme_minimal() +
+  labs(x = "Predict Found Narcotics", y = "Average Narcotics Discovery") + 
+  ggtitle("Calibration Plot - Linear vs. Logit Regression\n(In-Sample Test)")
+
+# Accuracy
+search_narcs_train <- search_narcs_train %>%
+  mutate(logit_narcs = as.numeric(predict_logit > 0.25),
+         linear_narcs = as.numeric(predict_linear > 0.25))
+acc_narcs_train_linear <- mean(search_narcs_train$Found_Narcotics ==
+                          search_narcs_train$linear_narcs)
+acc_narcs_train_logit <- mean(search_narcs_train$Found_Narcotics ==
+                          search_narcs_train$logit_narcs)
+round(acc_narcs_train_linear, 3)
+round(acc_narcs_train_logit, 3)
+
+# Precision
+prec_narcs_train_linear <- mean(search_narcs_train$Found_Narcotics
+                         [search_narcs_train$linear_narcs == 1])
+prec_narcs_train_logit <- mean(search_narcs_train$Found_Narcotics
+                        [search_narcs_train$logit_narcs == 1])
+
+round(prec_narcs_train_linear, 3)
+round(prec_narcs_train_logit, 3)
+
+# Sensitivity / Recall / True Positive Rate
+sens_narcs_train_linear <- mean(search_narcs_train$linear_narcs
+                           [search_narcs_train$Found_Narcotics == 1])
+sens_narcs_train_logit <- mean(search_narcs_train$logit_narcs
+                           [search_narcs_train$Found_Narcotics == 1])
+
+round(sens_narcs_train_linear, 3)
+round(sens_narcs_train_logit, 3)
+
+# Specificity
+spec_narcs_train_linear <- mean(search_narcs_train$linear_narcs
+                           [search_narcs_train$Found_Narcotics == 0] == 0)
+spec_narcs_train_logit <- mean(search_narcs_train$logit_narcs
+                           [search_narcs_train$Found_Narcotics == 0] == 0)
+
+round(spec_narcs_train_linear, 3)
+round(spec_narcs_train_logit, 3)
+
+# ROC Curve
+library(ROCR)
+pred_narcs_train_linear <- prediction(search_narcs_train$predict_linear,
+                          search_narcs_train$Found_Narcotics)
+perf_narcs_train_linear <- performance(pred_narcs_train_linear, measure = "tpr", x.measure = "fpr")
+pred_narcs_train_logit <- prediction(search_narcs_train$predict_logit,
+                          search_narcs_train$Found_Narcotics)
+perf_narcs_train_logit <- performance(pred_narcs_train_logit, measure = "tpr", x.measure = "fpr")
+plot(perf_narcs_train_linear)
+abline(0,1,lty = 2)
+plot(perf_narcs_train_logit)
+abline(0,1,lty = 2)
+
+# Calculate AUC
+auc_narcs_train_linear <- performance(pred_narcs_train_linear, measure = "auc")@y.values[[1]]
+auc_narcs_train_logit <- performance(pred_narcs_train_logit, measure = "auc")@y.values[[1]]
+
+```
+
+```{r Narcotics - Linear & Logit Model Assessment in test data (CV), include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+# -------------OUT OF SAMPLE TESTS--------------
+
+# Predicted values
+search_narcs_test$predict_linear <- round(predict(mod_narcs_linear, newdata = search_narcs_test), 1)
+search_narcs_test$predict_logit <- round(predict(mod_narcs_logit, newdata = search_narcs_test, type = "response"), 1)
+
+# Calibration
+cal_narcs_test_logit <- search_narcs_test %>% group_by(predict_logit) %>%
+             summarize(freq = mean(Found_Narcotics), count = n())
+cal_narcs_test_logit
+
+cal_narcs_test_linear <- search_narcs_test %>% group_by(predict_linear) %>%
+             summarize(freq = mean(Found_Narcotics), count = n())
+cal_narcs_test_linear
+
+# Calibration plot
+cal_narcs_plot_test <- ggplot() + 
+  geom_abline(col = 2) + 
+  geom_point(data= cal_narcs_test_linear, aes(x = predict_linear, y = freq, size=count), color="green", alpha=0.5) + 
+    geom_point(data= cal_narcs_test_logit, aes(x = predict_logit, y = freq, size=count), alpha=0.5) + 
+  xlim(0,1) + ylim(0,1) + theme_minimal() +
+  labs(x = "Predict Found Narcotics", y = "Average Narcotics Discovery") + 
+  ggtitle("Calibration Plot - Linear vs. Logit Regression\n(In-Sample Test)")
+
+# Accuracy
+search_narcs_test <- search_narcs_test %>%
+  mutate(logit_narcs = as.numeric(predict_logit > 0.25),
+         linear_narcs = as.numeric(predict_linear > 0.25))
+acc_narcs_test_linear <- mean(search_narcs_test$Found_Narcotics ==
+                          search_narcs_test$linear_narcs)
+acc_narcs_test_logit <- mean(search_narcs_test$Found_Narcotics ==
+                          search_narcs_test$logit_narcs)
+round(acc_narcs_test_linear, 3)
+round(acc_narcs_test_logit, 3)
+
+# Precision
+prec_narcs_test_linear <- mean(search_narcs_test$Found_Narcotics
+                         [search_narcs_test$linear_narcs == 1])
+prec_narcs_test_logit <- mean(search_narcs_test$Found_Narcotics
+                        [search_narcs_test$logit_narcs == 1])
+
+round(prec_narcs_test_linear, 3)
+round(prec_narcs_test_logit, 3)
+
+# Sensitivity / Recall / True Positive Rate
+sens_narcs_test_linear <- mean(search_narcs_test$linear_narcs
+                           [search_narcs_test$Found_Narcotics == 1])
+sens_narcs_test_logit <- mean(search_narcs_test$logit_narcs
+                           [search_narcs_test$Found_Narcotics == 1])
+
+round(sens_narcs_test_linear, 3)
+round(sens_narcs_test_logit, 3)
+
+# Specificity
+spec_narcs_test_linear <- mean(search_narcs_test$linear_narcs
+                           [search_narcs_test$Found_Narcotics == 0] == 0)
+spec_narcs_test_logit <- mean(search_narcs_test$logit_narcs
+                           [search_narcs_test$Found_Narcotics == 0] == 0)
+
+round(spec_narcs_test_linear, 3)
+round(spec_narcs_test_logit, 3)
+
+# ROC Curve
+library(ROCR)
+pred_narcs_test_linear <- prediction(search_narcs_test$predict_linear,
+                          search_narcs_test$Found_Narcotics)
+perf_narcs_test_linear <- performance(pred_narcs_test_linear, measure = "tpr", x.measure = "fpr")
+pred_narcs_test_logit <- prediction(search_narcs_test$predict_logit,
+                          search_narcs_test$Found_Narcotics)
+perf_narcs_test_logit <- performance(pred_narcs_test_logit, measure = "tpr", x.measure = "fpr")
+plot(perf_narcs_test_linear)
+abline(0,1,lty = 2)
+plot(perf_narcs_test_logit)
+abline(0,1,lty = 2)
+
+# Calculate AUC
+auc_narcs_test_linear <- performance(pred_narcs_test_linear, measure = "auc")@y.values[[1]]
+auc_narcs_test_logit <- performance(pred_narcs_test_logit, measure = "auc")@y.values[[1]]
+```
+
+```{r Narcotics - Ridge, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+# cv.glmnet does cross validation (default is k = 10) automatically. Alpha = 0 specifies Ridge.
+mod_narcs_ridge <- cv.glmnet(x = narcs_x_training, y = narcs_y_training, alpha = 0)
+
+# Plot output
+plot(mod_narcs_ridge)
+
+# Calculate coefficients at optimal lambda
+predict(mod_narcs_ridge, "coefficients", newx = narcs_x_training, s = "lambda.1se")[,1]
+
+# Re-fit model at optimal
+mod_narcs_ridge_opt <- glmnet(x = narcs_x_training, 
+                        y = narcs_y_training, 
+                        alpha = 0, lambda = mod_narcs_ridge$lambda.1se)
+
+# Calculate RMSE
+rmse_by_hand(mod_narcs_ridge_opt, narcs_x_holdout, narcs_y_holdout)
+
+```
+
+```{r Narcotics - LASSO, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+# cv.glmnet does cross validation (default is k = 10) automatically. Alpha = 1 specifies LASSO.
+mod_narcs_lasso <- cv.glmnet(x = narcs_x_training, y = narcs_y_training, alpha = 1)
+
+# Plot output
+plot(mod_narcs_lasso)
+
+# Calculate coefficients at optimal lambda
+predict(mod_narcs_lasso, "coefficients", newx = narcs_x_training, s = "lambda.1se")[,1]
+
+# Re-fit model at optimal
+mod_narcs_lasso_opt <- glmnet(x = narcs_x_training, 
+                        y = narcs_y_training, 
+                        alpha = 1, lambda = mod_narcs_lasso$lambda.1se)
+
+# Calculate RMSE for Lasso
+rmse_by_hand(mod_narcs_lasso_opt, narcs_x_holdout, narcs_y_holdout)
+```
+
+```{r Narcotics - Random Forests, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+library(randomForest)
+
+# fit a random forest model
+mod_narcs_rf <- randomForest(x = narcs_x_training,
+                       y = narcs_y_training,
+                       importance = TRUE, ntree=100)
+mod_narcs_rf
+
+# Table of variable importance
+importance(mod_narcs_rf)
+
+# Plot of variable importance
+VIP_narcs <- varImpPlot(mod_narcs_rf, n.var = 10, main = "Variable Importance Plot\n(top 10 only)",
+           type = 1, cex = 1.5, pt.cex = 1.5, pch = 16)
+VIP_narcs
+```
+
+```{r Summary Charts, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+
+# CHARTS
+
+library(RColorBrewer)
+
+DispatchesByMonth <- df %>%
+  mutate(IncidentCategory = ifelse(test = (IncidentCategory=="Infrastructure" |
+                  IncidentCategory=="Event" |
+                  IncidentCategory=="Child Welfare" |
+                  IncidentCategory=="Fire" |
+                  IncidentCategory=="Drug" |
+                  IncidentCategory=="Weapon"), 
+          yes = "Other", no = as.character(IncidentCategory))) %>%
+  ggplot(aes(DispatchMonth, fill=IncidentCategory)) + geom_bar() +
+  labs(x="Month", y="", fill="Type of\nIncident") + 
+  ggtitle("OPD Dispatches per Month, 2014") +
+  theme_minimal() + scale_fill_brewer(palette="Set3")
+
+EncountersByMonth <- df %>% filter(is.na(ContactMonth)==FALSE) %>%
+  ggplot(aes(ContactMonth)) + geom_bar() +
+  labs(x="Month", y="") +
+  ggtitle("OPD Encounters per Month, 2014") +
+  theme_minimal() + scale_fill_brewer(palette="Set3")
+
+SearchesByMonth <- df %>% filter(is.na(ContactMonth)==FALSE) %>%
+  ggplot(aes(ContactMonth, fill=SearchConducted)) + geom_bar() +
+  labs(x="Month", y="", fill="Search\nConducted?") +
+  ggtitle("OPD Encounters per Month, 2014") +
+  theme_minimal() + scale_fill_brewer(palette="Set2")
+
+FindingsByMonth <- df %>%
+  filter(SearchConducted == "Yes") %>%
+  mutate(Finding = ifelse(test = (Found_Firearms==TRUE & Found_Narcotics==FALSE),
+                          yes = "Firearms", no = 
+                    ifelse(test = (Found_Firearms==FALSE & Found_Narcotics==TRUE),
+                           yes = "Narcotics", no = 
+                    ifelse(test = (Found_Firearms==TRUE & Found_Narcotics==TRUE),
+                           yes = "Firearms & Narcotics", no = "None")))) %>%
+  ggplot(aes(ContactMonth, fill=Finding)) + geom_bar() +
+  labs(x="Month", y="", fill="Finding") +
+  ggtitle("Result of OPD Searches per Month, 2014") +
+  theme_minimal() + scale_fill_brewer(palette="Set2")
+
+OutcomeByMonth <- df %>% filter(is.na(ContactMonth)==FALSE) %>%
+  ggplot(aes(ContactMonth, fill=ResultOfEncounter)) + geom_bar() +
+  labs(x="Month", y="", fill="Result of\nEncounter") +
+  ggtitle("Result of OPD Encounters per Month, 2014") +
+  theme_minimal() + scale_fill_brewer(palette="Set2")
+```
+
+# How is the Oakland Police Department doing?
+
+## OPD has a few, very messy datasets
+
+- Dispatcher records
+  
+  - Citizen calls for service
+  
+  - Shotspotter records
+
+- Police encounter data
+
+## How can we use these data to improve policing?
+
+- What's the predicted result of a police search?
+
+  - **Firearms**
+
+  - **Narcotics**
+
+  - Other weapons
+
+  - Other evidence
+
+##  There were ~760,000 incidents reported to or involving OPD in 2014 | Dispatches were evenly spread throughout the year
+
+```{r}
+DispatchesByMonth
+```
+
+## Police encounters were slightly more seasonal | Most resulted citations or reports
+
+```{r}
+OutcomeByMonth
+```
+
+## Approximately 30 percent of encounters involved a search
+
+```{r}
+SearchesByMonth
+```
+
+## And most searches did not find either firearms or narcotics
+```{r}
+FindingsByMonth
+```
+
+# Can we predict what police find when conducting a search?
+
+## Models
+
+- Linear regression
+
+- Logistic regression
+
+- LASSO
+
+- Ridge
+
+- Random forest
+
+## Firearms | Linear and logistic model calibration  was good for the training set
+
+```{r, warning = FALSE}
+cal_plot_train
+```
+
+## Firearms | But not so good for the test set
+
+```{r, warning = FALSE}
+cal_plot_test
+```
+
+## Firearms | Linear and Logistic regressions performed similarly on most measures
+
+- RMSE - Linear: `r round(rmse(mod_linear, data = search_firearms_test),3 )`, Logistic: `r round(rmse(mod_logit, data = search_firearms_test),3 )`
+
+- ACCURACY - Linear: `r round(acc_test_linear, 3)`, Logistic: `r round(acc_test_logit, 3)`
+  
+- PRECISION - Linear: `r round(prec_test_linear, 3)`, Logistic: `r round(prec_test_logit, 3)`
+  
+- SENSITIVITY - Linear: `r round(sens_test_linear, 3)`, Logistic: `r round(prec_test_logit, 3)`
+  
+- SPECIFICITY - Linear: `r round(spec_test_linear, 3)`, Logistic: `r round(spec_test_logit, 3)`
+
+
+## Firearms
+
+Linear model: AUC = `r round(auc_test_linear, 3)`
+
+```{r, warning = FALSE}
+plot(perf_test_linear)
+abline(0,1,lty = 2)
+```
+
+## Firearms
+
+Logistic model: AUC = `r round(auc_test_logit, 3)`
+
+```{r, warning = FALSE}
+plot(perf_test_logit)
+abline(0,1,lty = 2)
+```
+
+## Firearms | Ridge
+RMSE: `r round(rmse_by_hand(mod_ridge_opt, firearms_x_holdout, firearms_y_holdout), 3)`
+
+```{r}
+plot(mod_ridge)
+```
+
+## Firearms | LASSO
+RMSE: `r round(rmse_by_hand(mod_lasso_opt, firearms_x_holdout, firearms_y_holdout), 3)`
+
+```{r}
+plot(mod_lasso)
+```
+
+## Firearms | Random Forest
+
+```{r}
+varImpPlot(mod_rf, n.var = 10, main = "Variable Importance Plot\n(top 10 only)",
+           type = 1, cex = 1.5, pt.cex = 1.5, pch = 16)
+```
+
+## Narcotics | Linear and logistic model calibration  was good for the training set
+
+```{r, warning = FALSE}
+cal_narcs_plot_train
+```
+
+## Narcotics | And not baad for the test set!
+
+```{r, warning = FALSE}
+cal_narcs_plot_test
+```
+
+## Narcotics | Linear and Logistic regressions performed similarly on most measures
+
+- RMSE - Linear: `r round(rmse(mod_narcs_linear, data = search_narcs_test),3 )`, Logistic: `r round(rmse(mod_narcs_logit, data = search_narcs_test),3 )`
+
+- ACCURACY - Linear: `r round(acc_narcs_test_linear, 3)`, Logistic: `r round(acc_narcs_test_logit, 3)`
+  
+- PRECISION - Linear: `r round(prec_narcs_test_linear, 3)`, Logistic: `r round(prec_narcs_test_logit, 3)`
+  
+- SENSITIVITY - Linear: `r round(sens_narcs_test_linear, 3)`, Logistic: `r round(prec_narcs_test_logit, 3)`
+  
+- SPECIFICITY - Linear: `r round(spec_narcs_test_linear, 3)`, Logistic: `r round(spec_narcs_test_logit, 3)`
+
+
+## Narcotics
+
+Linear model: AUC = `r round(auc_narcs_test_linear, 3)`
+
+```{r, warning = FALSE}
+plot(perf_narcs_test_linear)
+abline(0,1,lty = 2)
+```
+
+## Narcotics
+
+Logistic model: AUC = `r round(auc_narcs_test_logit, 3)`
+
+```{r, warning = FALSE}
+plot(perf_narcs_test_logit)
+abline(0,1,lty = 2)
+```
+
+## Narcotics | Ridge
+RMSE: `r round(rmse_by_hand(mod_narcs_ridge_opt, narcs_x_holdout, narcs_y_holdout), 3)`
+
+```{r}
+plot(mod_narcs_ridge)
+```
+
+## Narcotics | LASSO
+RMSE: `r round(rmse_by_hand(mod_narcs_lasso_opt, narcs_x_holdout, narcs_y_holdout), 3)`
+
+```{r}
+plot(mod_narcs_lasso)
+```
+
+## Narcotics | Random Forest
+
+```{r}
+varImpPlot(mod_narcs_rf, n.var = 10, main = "Variable Importance Plot\n(top 10 only)",
+           type = 1, cex = 1.5, pt.cex = 1.5, pch = 16)
+```
+
+# Takeaways
+
+## More complex is not always better
+
+- Linear and logistic models performed comparably to LASSO and Ridge
+
+## Garbage in, Garbage out!
+
+- Police data are messy, with lots of errors
+
+- Lots of data != transparency
+
+- Still need to understand what variables mean to make useful models
+
