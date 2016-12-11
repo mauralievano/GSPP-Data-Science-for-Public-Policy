@@ -1,0 +1,134 @@
+---
+title: "Zone to Super District Commutes"
+output: html_document
+---
+
+
+```{r setup}
+#install.packages('tidyverse')
+library(tidyverse)
+```
+
+Load in the complete file and clean.
+```{r}
+
+work_loc <- read_csv('wsLocResults_3.csv')
+
+# Change to factors
+work_loc$HomeTAZfactor <- as.factor(work_loc$HomeTAZ)
+
+# Create a commute variable that is equal to either the
+# work location or the school location
+# if both are zero - take out
+work_loc <- work_loc %>%
+            mutate(commute_dest = ifelse(WorkLocation != 0, WorkLocation, 
+                                         SchoolLocation)) %>%
+            filter(commute_dest != 0) 
+
+```
+
+Add the super district key so we can aggregate to the super district level
+```{r}
+# install.packages('plyr')
+library(plyr)
+
+# Merge one to many with the zone/district key so I know which superdistcit they are going to
+zone_key <- read.csv('zone_district_key.csv')
+
+# rename taz key so I can merge
+zone_key$commute_dest <- zone_key$taz_key
+
+work_loc_super <- join(work_loc, zone_key, by='commute_dest', type='left', match='all')
+
+# rename superD so we know it's a commute destination
+names(work_loc_super)[names(work_loc_super) == 'SUPERD'] <- 'superD_dest'
+
+# Remove destinations that are coded NA
+work_loc_super <- work_loc_super %>%
+          filter(!is.na(superD_dest)) 
+
+#Detach plyr because it causes the aggregations in the next steps to fail.
+detach("package:plyr", unload=TRUE)
+```
+
+
+Aggregate home destination to the zone level, destination to the super district level.
+```{r}
+super_workloc <- work_loc_super %>%
+                group_by(HomeTAZfactor, superD_dest) %>%
+                summarize(n=n()) 
+              
+```
+
+Add in centroids
+```{r}
+# Zone centroids
+taz_centroids <- read_csv("taz_centroids.csv")
+
+# Weighted centroids
+zone_Wcentroids <- read_csv("zoneD_Wcentroids.csv")
+
+zone_Wcentroids <- left_join( taz_centroids, zone_Wcentroids, by='taz_key') 
+                    
+zone_Wcentroids <- zone_Wcentroids %>% select(taz_key, mean_lat, mean_lon, geometry)
+
+# extracting lat/lon points from geom
+zone_Wcentroids <- zone_Wcentroids %>%
+                    mutate(centroid_lon =as.numeric(substr(zone_Wcentroids$geometry, 8, 23))) %>%
+                    mutate(centroid_lat =
+                             as.numeric(gsub(')', '',
+                               strsplit(zone_Wcentroids$geometry, ' ')[[1]][3]))) 
+
+# repalce entries that were missing weighted cetroids with unweighted centroids
+zone_Wcentroids <- zone_Wcentroids %>%
+                    mutate(lat = ifelse(is.na(zone_Wcentroids$mean_lat), centroid_lat, mean_lat)) %>%
+                    mutate(lon = ifelse(is.na(zone_Wcentroids$mean_lon), centroid_lon, mean_lon))
+
+# select only certain rows for join
+zone_centroids <- zone_Wcentroids %>% select(taz_key, lat, lon)
+
+```
+
+```{r}
+
+# Weighted Super District Centroids
+super_centroids <- read_csv("superD_Wcentroids.csv")
+names(super_centroids)[names(super_centroids) == 'SUPERD'] <- 'superD_dest'
+
+# add in super district centroids to match destinations
+super_workloc <- left_join(super_workloc, super_centroids, by='superD_dest' )
+names(super_workloc)[names(super_workloc) == 'mean_lat'] <- 'dest_lat'
+names(super_workloc)[names(super_workloc) == 'mean_lon'] <- 'dest_lon'
+
+# Change names in zone_centroids for merging 
+names(zone_centroids)[names(zone_centroids) == 'taz_key'] <- 'HomeTAZfactor'
+names(zone_centroids)[names(zone_centroids) == 'lat'] <- 'home_lat'
+names(zone_centroids)[names(zone_centroids) == 'lon'] <- 'home_lon'
+
+
+super_workloc <- super_workloc %>% mutate(HomeTAZ = as.character(HomeTAZfactor))
+zone_centroids <- zone_centroids %>% mutate(HomeTAZ = as.character(HomeTAZ))
+super_workloc <- left_join(super_workloc, zone_centroids, by='HomeTAZ')
+
+```
+
+Format lat and lon for google API
+```{r}
+
+super_workloc <- super_workloc %>% 
+                  mutate(home_loc = paste(home_lat, "+", home_lon, sep = "")) %>%
+                  mutate(dest_loc = paste(dest_lat, "+", dest_lon, sep = "")) 
+
+
+# fix error in TAZ 1333 (weighted is wrong due to a rental listing (falsely) located in the ocean).
+commute <- read_csv('zone_to_super.csv')
+
+# POINT (-122.6132420240483 38.2376432874632)
+
+super_workloc$home_lat[super_workloc$HomeTAZfactor==1333] <- 38.2376432874632
+super_workloc$home_lon[super_workloc$HomeTAZfactor==1333] <- -122.6132420240483
+super_workloc$home_loc[super_workloc$HomeTAZfactor==1333] <- '38.2376432874632+-122.6132420240483'
+
+write_csv(super_workloc, 'zone_to_super.csv')
+```
+
