@@ -1,0 +1,31 @@
+READ ME 
+
+Overview
+This project used raw results from The National Survey on Drug Use and Health, 2014 
+ to create predictive models for heroin use in the united states. With an increasing cost of the heroin epidemic throughout America in lives lost and monetary damage as a result of crime and healthcare costs, it is essential to be able to predict and provide help for those suffering from heroin and opioid pain reliever addictions.  
+
+The code used for this project begins with data cleaning of the 2014 NSUDH for use as well as focus on key variables related to heroin use. Following this code descriptive summary statistics and graphs are represented to identify possible relationships with the key variables. Afterwards, different prediction techniques are modeled. These techniques include random forests, linear regression, logit repression, and tree models. 
+
+
+Software dependencies.
+1.	R, version 3.2.5
+2.	RStudio 3.3.2
+
+Data
+1.	raw_data.rda: The National Survey on Drug Use and Health, 2014, available here: http://www.icpsr.umich.edu/icpsrweb/NAHDAP/studies/36361
+
+2.	analysis_dataset.rda: The final Analysis Dataset derived from the raw data above. It includes variables drawn from a survey of 55,271 people on heroin and non-prescription pain killer use as well as demographics such as gender, income, race, etc.:
+
+Code
+All code comes from FinalRMD.rmd
+1.	# Section 1: Cleans the large data file and turns it into the analysis-dataset.rda
+2.	# Section 2: Presents summary statistics and graphical representation of relationships between heroin use and variables in the data. 
+3.	# Section 3: Examines different predictive models such as random forests, trees, linear, and logit regressions.  
+
+Presentation
+1.	http://rpubs.com/noahjlehman/234368: A slideshow presentation which presents the visualizations of our summary statistics and models. 
+
+More Information
+Feel free to contact Noah Lehman or Dan Willis to ask about this project.
+Noah Lehman: noahjlehman@berkeley.edu
+Dan Willis: danwillis@berkeley.edu 
