@@ -1,0 +1,443 @@
+---
+title: "Electric Vehicle Charging in CA: Final Project"
+author: "Julia Szinai"
+date: "December 7, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Reading in EV purchase data, population, per capita income 
+```{r #Reading in EV purchase data}
+
+
+#Read in vehicle sales data
+Car_sales <- read_csv(file = "CVRPStats.csv")
+
+#filtering for just PEVs 
+Car_sales <- Car_sales %>% filter(`Vehicle Category`=="BEV")
+
+#collapsing to zip code level, by vehicle type and date
+#sum up the number of vehicles purchased per day per zip code.
+Car_sales_zip_totals<- Car_sales  %>% group_by(ZIP,County) %>% tally()
+Car_sales_zip_totals$total_BEV_sales<- Car_sales_zip_totals$n
+Car_sales_zip_totals$n <- NULL
+
+#Plotting vehicle sales by County
+
+Car_sales_county_totals<- Car_sales_zip_totals  %>% group_by(County) %>% summarise(total_BEV_sales=sum(total_BEV_sales))
+
+Car_sales_county_totals$County.f <- factor(Car_sales_county_totals$County)
+
+library(forcats)
+#reorders in descending order (largest county first)
+Car_sales_county_totals <- ungroup(Car_sales_county_totals) %>% mutate(County.f = fct_reorder(County.f, total_BEV_sales, max, .desc = TRUE))
+
+# check the levels again!
+levels(Car_sales_county_totals$County.f)
+
+#Use in Presentation
+#Cars purhcased by county
+ggplot(Car_sales_county_totals[Car_sales_county_totals$total_BEV_sales>50, ], aes(x=County.f, y=total_BEV_sales, fill=County.f)) +
+    geom_bar(stat="identity") + xlab("County") + ylab("Number of cars purchased") + ggtitle("Cumulative BEV purchases 2010 - 2016, by county") + theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1),legend.position="none", panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+#reading in population data, cleaning data
+Ca_pop <- read_csv(file = "CA_pop_county.csv")
+colnames(Ca_pop)[3] <- 'County'
+Ca_pop <- Ca_pop %>% dplyr::select(County, respop72015)
+Ca_pop <- Ca_pop %>% filter(County !="Geography")
+
+library(stringr)
+Ca_pop$County2 <- str_split_fixed(Ca_pop$County, " County", 3)
+Ca_pop$County <- Ca_pop$County2 
+Ca_pop$County2 <-NULL
+
+#merging car sales with population data
+Car_sales_pop_county <- left_join(Car_sales_county_totals, Ca_pop, by = c("County" = "County"))
+Car_sales_pop_county$County2 <-NULL
+
+#number of BEVS per capita, by county
+Car_sales_pop_county$respop72015 <- as.numeric(Car_sales_pop_county$respop72015)
+
+Car_sales_pop_county$BEV_per_capita <- Car_sales_pop_county$total_BEV_sales / Car_sales_pop_county$respop72015
+
+#reorder the counties based on this per capita BEV sales
+#reorders in descending order (largest county first)
+Car_sales_pop_county <- ungroup(Car_sales_pop_county) %>% mutate(County.f = fct_reorder(County.f, BEV_per_capita, max, .desc = TRUE))
+
+# check the levels again!
+levels(Car_sales_county_totals$County.f)
+
+#reading in per capita income data data, cleaning data
+Ca_income <- read_csv(file = "CA_per_cap_income.csv")
+colnames(Ca_income)[3] <- 'County'
+Ca_income <- Ca_income %>% dplyr::select(County, HD01_VD01)
+Ca_income <- Ca_income %>% filter(County !="Geography")
+
+library(stringr)
+Ca_income$County2 <- str_split_fixed(Ca_income$County, " County", 3)
+Ca_income$County <- Ca_income$County2 
+Ca_income$County2 <-NULL
+colnames(Ca_income)[2] <- 'Per_cap_income'
+
+#merging car sales with population data
+Car_sales_pop_income_county <- left_join(Car_sales_pop_county, Ca_income, by = c("County" = "County"))
+Car_sales_pop_income_county$Per_cap_income <- as.numeric(Car_sales_pop_income_county$Per_cap_income)
+
+#Use in Presentation
+#plot of per capita BEV sales shows more BEVs in wealthier counties
+ggplot(data=Car_sales_pop_income_county, aes(x=Per_cap_income, y=BEV_per_capita)) + geom_text(aes(label=County), size=3, check_overlap = TRUE)+ xlab("Per capita income") + ylab("BEVs per capita") + ggtitle("BEV purchases are concentrated in wealthier counties") + theme_bw()
+
+```
+
+#Analyzing EV trends and Environmental Impact Indicators
+```{r Load in and clean mapping data}
+
+#reading in Environmental impact data, cleaning data
+Ca_enviro <- read_csv(file = "CalEnviroScreen_2.0_2014.csv")
+library(stringr)
+Ca_enviro$Location2 <- str_split_fixed(Ca_enviro$`Location 1`, " 9", 3)
+Ca_enviro$Location3 <- str_split_fixed(Ca_enviro$`Location 1`, "\\(", 2)
+
+colnames(Ca_enviro)[3] <- 'County'
+
+Ca_enviro_county <- Ca_enviro  %>% group_by(County) %>% summarise(Ozone_avg=mean(Ozone),PM2.5_avg=mean(PM2.5),Diesel_PM_avg=mean(`Diesel PM`),Traffic_avg=mean(Traffic))
+
+#merging car sales with environmental data
+Car_sales_pop_income_enviro_county <- left_join(Car_sales_pop_income_county, Ca_enviro_county, by = c("County" = "County"))
+
+#Include in Presentation
+#graphing environmental indicators againts BEVs per capita
+#High Traffic vs. BEV per capita
+ggplot(data=Car_sales_pop_income_enviro_county, aes(x=Traffic_avg, y=BEV_per_capita)) + geom_text(aes(label=County,color=Per_cap_income), size=3, check_overlap = TRUE)+ xlab("Traffic density") + ylab("BEVs per capita") + ggtitle("BEV purchases driven more by income than traffic burden") + scale_color_gradient(low="blue", high="red", name = "Per capita income") + theme_bw()
+
+#Displaying the data on a map!
+library(maptools)
+library(rgdal)
+library(rgeos)
+#Load in the data file 
+County_shapefile=readShapeSpatial('CaliforniaCounty.shp')
+names(County_shapefile)
+print(County_shapefile$NAME)
+
+#merging hourly usage by county with shape file
+County.shp.f <- fortify(County_shapefile, region="NAME")
+class(County.shp.f)
+names(County.shp.f)
+
+merged_County.shp.f <- left_join(County.shp.f, Car_sales_pop_income_enviro_county, c("id"="County"))
+
+County_names.shp <- merged_County.shp.f %>% group_by(id) %>% summarize(clat = mean(lat), clong = mean(long))
+
+#Plotting total number of BEV Sales by County
+library("RColorBrewer")
+library(scales) # for muted
+
+#Include in Presentation
+#Plotting heat map of BEV Sales per Capita by County
+#Include in Presentation
+m_1 <- ggplot() +
+  geom_polygon(data = merged_County.shp.f, 
+               aes(x = long, y = lat, group = group, fill = BEV_per_capita), 
+               color = "black", size = 0.15) + coord_map() + ggtitle("BEV purchases by county, 2010-2016") + theme(axis.title.x = element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.title.y = element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank(), legend.justification=c(1,1), legend.position=c(1,1), panel.border = element_blank(), panel.grid.major = element_blank(), panel.background = element_blank()) + scale_fill_gradient(low="blue", high="red", name = "BEVs/capita") 
+m_1
+
+
+```
+
+#More data cleaning and mapping of EV charging stations vs. Vehicle Sales
+```{r Load in and clean mapping data}
+#can skip to this to get processed Status file
+CA_Station_Status4 <- readRDS("CA_Station_Status4.rds")
+
+#creating a factor variable for id, charger type, zip_code
+CA_Station_Status4$id.f <- factor(CA_Station_Status4$id)
+CA_Station_Status4$Charger_type.f <- factor(CA_Station_Status4$Charger_type)
+CA_Station_Status4$zip_code.f <- factor(CA_Station_Status4$zip_code)
+CA_Station_Status4$City.f <- factor(CA_Station_Status4$City)
+CA_Station_Status4$County.f <- factor(CA_Station_Status4$County)
+CA_Station_Status4$Hour.f <- factor(CA_Station_Status4$hour)
+
+require(MASS)
+require(dplyr)
+CA_Station_Status4_for_pred <- CA_Station_Status4 %>% dplyr::select(id.f, in_use, total, available, date, Hour.f, zip_code.f, member_rate, usage_rate, Charger_type.f, City.f, County.f, day_of_week)
+
+#collapsing data to the zip code and charger type level for each hour
+CA_Station_Status4_zip <-CA_Station_Status4_for_pred %>% group_by(zip_code.f,date,Hour.f,Charger_type.f) %>% summarise(plugs_in_use =sum(in_use), plugs_available=sum(available), total_plugs=sum(total))
+
+# get day of week
+library(lubridate)
+CA_Station_Status4_zip <- CA_Station_Status4_zip %>% 
+          mutate(day_of_week = wday(date, label = TRUE, abbr = TRUE))
+
+#get weekend
+CA_Station_Status4_zip <- CA_Station_Status4_zip %>%
+          mutate(weekend = as.numeric(day_of_week %in% c("Sat", "Sun")))
+
+CA_Station_Status4_zip$weekend.f <- factor(CA_Station_Status4_zip$weekend)
+
+#saving intermediate file
+saveRDS(CA_Station_Status4_zip, file="CA_Station_Status4_zip.rds")
+# write.csv(file="CA_Station_Status4_zip.csv", x=CA_Station_Status4_zip)
+
+#can skip to this to get processed Status file for prediction
+CA_Station_Status4_zip <- readRDS("CA_Station_Status4_zip.rds")
+
+##FOR merging with car sales data
+#collapsing data to the zip code for each day, for each hour
+Status_zip_hour <-CA_Station_Status4_for_pred %>% group_by(zip_code.f,date,Hour.f) %>% summarise(plugs_in_use =sum(in_use), plugs_available=sum(available), total_plugs=sum(total))
+
+#Getting usage and availability percentages
+Status_zip_hour$Perc_in_use = Status_zip_hour$plugs_in_use/Status_zip_hour$total_plugs
+Status_zip_hour$Perc_available = Status_zip_hour$plugs_available/Status_zip_hour$total_plugs
+
+# #averaging to get hourly availability and usage
+Status_zip_hour_avg <-Status_zip_hour  %>% group_by(zip_code.f,Hour.f) %>% summarise(plugs_in_use = mean(plugs_in_use), plugs_available=mean(plugs_available), total_plugs=mean(total_plugs), Perc_in_use=mean(Perc_in_use),Perc_available=mean(Perc_available))
+
+Status_zip_hour_avg$plugs_in_use <- round(Status_zip_hour_avg$plugs_in_use,digits = 0)
+Status_zip_hour_avg$plugs_available <- round(Status_zip_hour_avg$plugs_available,digits = 0)
+Status_zip_hour_avg$total_plugs <- round(Status_zip_hour_avg$total_plugs,digits = 0)
+
+Status_zip_hour_avg$zip_code <- as.character(Status_zip_hour_avg$zip_code.f)
+Car_sales_zip_totals$ZIP2 <- as.character(Car_sales_zip_totals$ZIP)
+
+Status_zip_hour_avg_car_sales <- left_join(Status_zip_hour_avg,Car_sales_zip_totals, c("zip_code"="ZIP2"))
+
+Status_zip_hour_avg_car_sales$plugs_per_BEV <- Status_zip_hour_avg_car_sales$total_plugs/Status_zip_hour_avg_car_sales$total_BEV_sales
+
+#aggregate to county level
+Status_County_hour_avg_car_sales <- Status_zip_hour_avg_car_sales %>% group_by(County,Hour.f)  %>% summarise(plugs_in_use=sum(plugs_in_use),plugs_available=sum(plugs_available),total_plugs=sum(total_plugs),total_BEV_sales=sum(total_BEV_sales))
+
+Status_County_hour_avg_car_sales$plugs_per_BEV <- Status_County_hour_avg_car_sales$total_plugs/Status_County_hour_avg_car_sales$total_BEV_sales
+
+plugs_per_BEV_county <- Status_County_hour_avg_car_sales %>% group_by(County)  %>% summarise(plugs_per_BEV=max(plugs_per_BEV))
+
+plugs_per_BEV_county$County <- as.factor(plugs_per_BEV_county$County)
+
+library(forcats)
+#reorders in descending order (largest zip first)
+plugs_per_BEV_county <- ungroup(plugs_per_BEV_county) %>% mutate(County = fct_reorder(County, plugs_per_BEV, max, .desc = TRUE))
+
+#Include in Presentation
+#plotting density of chargers relative to vehicles
+ggplot(data=plugs_per_BEV_county, aes(x=County, y=plugs_per_BEV, fill=County)) +
+    geom_bar(stat="identity") + xlab("County") + ylab("Number of Chargers per BEV") + ggtitle("Number of chargers per number of BEVs, by county") + theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1),legend.position="none", panel.background = element_blank(), axis.line = element_line(colour = "black"))
+
+
+```
+
+
+
+##Analyzing EV charging status availability by charger by hour, exporting data to Matlab and QGIS
+```{r Analyzing EV charging status availability by charger}
+
+#Getting usage and availability percentages
+CA_Station_Status_by_id <- CA_Station_Status4 
+
+CA_Station_Status_by_id$Hour.f <- as.factor(CA_Station_Status_by_id$hour)
+CA_Station_Status_by_id$Charger_type.f <- as.factor(CA_Station_Status_by_id$Charger_type)
+
+CA_Station_Status_by_id$Perc_in_use = CA_Station_Status_by_id$in_use/CA_Station_Status_by_id$total
+CA_Station_Status_by_id$Perc_available = CA_Station_Status_by_id$available/CA_Station_Status_by_id$total
+
+# #averaging to get hourly availability and usage
+CA_Station_Status_by_id_avg <-CA_Station_Status_by_id  %>% group_by(id,latitude, longitude, name, Hour.f,weekend, Charger_type.f) %>% summarise(plugs_in_use = mean(in_use), plugs_available=mean(available), total_plugs=mean(total), Perc_in_use=mean(Perc_in_use),Perc_available=mean(Perc_available))
+
+CA_Station_Status_by_id_avg$plugs_in_use <- round(CA_Station_Status_by_id_avg$plugs_in_use,digits = 0)
+CA_Station_Status_by_id_avg$plugs_available <- round(CA_Station_Status_by_id_avg$plugs_available,digits = 0)
+CA_Station_Status_by_id_avg$total_plugs <- round(CA_Station_Status_by_id_avg$total_plugs,digits = 0)
+
+saveRDS(CA_Station_Status_by_id_avg, file="CA_Station_Status_by_id_avg.rds")
+write.csv(file="CA_Station_Status_by_id_avg.csv", x=CA_Station_Status_by_id_avg)
+
+#output to QGIS for plotting
+Station_Status_by_id_hour18_weekday <- CA_Station_Status_by_id_avg %>% filter(weekend==0 & Charger_type.f == "LEVEL 2" & Hour.f == 17)
+write.csv(file="Station_Status_by_id_hour18_weekday.csv", x=Station_Status_by_id_hour18_weekday)
+
+# #averaging to get overall availability and usage for each station
+CA_Station_Status_by_id_avg_overall <-CA_Station_Status_by_id  %>% group_by(id,latitude, longitude, name) %>% summarise(plugs_in_use = mean(in_use), plugs_available=mean(available), total_plugs=mean(total), Perc_in_use=mean(Perc_in_use),Perc_available=mean(Perc_available))
+
+CA_Station_Status_by_id_avg_overall$plugs_in_use <- round(CA_Station_Status_by_id_avg_overall$plugs_in_use,digits = 0)
+CA_Station_Status_by_id_avg_overall$plugs_available <- round(CA_Station_Status_by_id_avg_overall$plugs_available,digits = 0)
+CA_Station_Status_by_id_avg_overall$total_plugs <- round(CA_Station_Status_by_id_avg_overall$total_plugs,digits = 0)
+
+saveRDS(CA_Station_Status_by_id_avg_overall, file="CA_Station_Status_by_id_avg_overall.rds")
+write.csv(file="CA_Station_Status_by_id_avg_overall.csv", x=CA_Station_Status_by_id_avg_overall)
+
+
+Station_Status_by_id_avg_weekday_L2 <- CA_Station_Status_by_id_avg %>% filter(weekend==0 & Charger_type.f == "LEVEL 2")
+Station_Status_by_id_avg_weekend_L2 <- CA_Station_Status_by_id_avg %>% filter(weekend ==1 & Charger_type.f == "LEVEL 2")
+Station_Status_by_id_avg_weekday_DC <- CA_Station_Status_by_id_avg %>% filter(weekend ==0 & Charger_type.f == "DCFAST")
+Station_Status_by_id_avg_weekend_DC <- CA_Station_Status_by_id_avg %>% filter(weekend ==1 & Charger_type.f == "DCFAST")
+
+#Exporting to matlab
+
+write.csv(file="Station_Status_by_id_avg_weekday_L2.csv", x=Station_Status_by_id_avg_weekday_L2) 
+write.csv(file="Station_Status_by_id_avg_weekend_L2.csv", x=Station_Status_by_id_avg_weekend_L2) 
+write.csv(file="Station_Status_by_id_avg_weekday_DC.csv", x=Station_Status_by_id_avg_weekday_DC) 
+write.csv(file="Station_Status_by_id_avg_weekend_DC.csv", x=Station_Status_by_id_avg_weekend_DC) 
+
+#Joining hourly averages by id to other geographic info about ids
+CA_Station_Status_by_id_avg2 <-left_join(CA_Station_Status_by_id_avg, CA_Station_County, by = c("id" = "id"))
+
+#averaging by county
+CA_Station_Status_by_county_avg <- CA_Station_Status_by_id_avg2 %>% group_by(County, Hour.f,weekend, Charger_type.f) %>% summarise(plugs_in_use = mean(plugs_in_use), plugs_available=mean(plugs_available), total_plugs=mean(total_plugs), Perc_in_use=mean(Perc_in_use),Perc_available=mean(Perc_available))
+
+#joining sales data by county
+CA_Station_Status_by_county_avg <- left_join(CA_Station_Status_by_county_avg, Car_sales_pop_income_enviro_county, by = c("County" = "County"))
+
+#looking at hour_12, weekday
+CA_Station_Status_by_county_hour12_weekday <- CA_Station_Status_by_county_avg  %>% filter(as.numeric(Hour.f) == 12 & Charger_type.f == "LEVEL 2" & weekend == 0)  
+
+g1 <- ggplot(data=CA_Station_Status_by_county_hour12_weekday, aes(x=Perc_in_use, y=total_BEV_sales)) + geom_text(aes(label=County), size=3, check_overlap = TRUE)+ ylab("Total BEV Purchases") + ggtitle("12 PM, weekday")  + theme(axis.title.x=element_blank(), axis.text.x=element_blank(),     axis.ticks.x=element_blank())
+
+#looking at hour_12, weekend
+CA_Station_Status_by_county_hour12_weekend <- CA_Station_Status_by_county_avg  %>% filter(as.numeric(Hour.f) == 12 & Charger_type.f == "LEVEL 2" & weekend == 1)  
+
+g2 <- ggplot(data=CA_Station_Status_by_county_hour12_weekend, aes(x=Perc_in_use, y=total_BEV_sales)) + geom_text(aes(label=County), size=3, check_overlap = TRUE)+ xlab("Avg. % of chargers in use") + ylab("Total BEV Purchases") + ggtitle("12 PM, weekend") 
+
+#looking at hour_18, weekday
+CA_Station_Status_by_county_hour16_weekday <- CA_Station_Status_by_county_avg  %>% filter(as.numeric(Hour.f) == 18 & Charger_type.f == "LEVEL 2" & weekend == 0)  
+
+g3 <- ggplot(data=CA_Station_Status_by_county_hour16_weekday, aes(x=Perc_in_use, y=total_BEV_sales)) + geom_text(aes(label=County), size=3, check_overlap = TRUE)+ xlab("Avg. % of chargers in use") + ggtitle("5 PM, weekday")  + theme(axis.title.y=element_blank(), axis.text.y=element_blank(),     axis.ticks.y=element_blank(), axis.title.x=element_blank(), axis.text.x=element_blank(),     axis.ticks.x=element_blank())
+
+#looking at hour_18, weekend
+CA_Station_Status_by_county_hour16_weekend <- CA_Station_Status_by_county_avg  %>% filter(as.numeric(Hour.f) == 18 & Charger_type.f == "LEVEL 2" & weekend == 1)  
+
+g4 <- ggplot(data=CA_Station_Status_by_county_hour16_weekend, aes(x=Perc_in_use, y=total_BEV_sales)) + geom_text(aes(label=County), size=3, check_overlap = TRUE)+ xlab("Avg. % of chargers in use") + ggtitle("5 PM, weekend") + theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+multiplot(g1,g2,g3,g4,cols=2)
+
+```
+
+#Looking at effect of workplace charging
+```{r Looking at effect of workplace charging}
+
+#read in charging status data
+decision_factors_raw <- read_csv(file = "Decisionfactors.csv")
+
+decision_factors <- decision_factors_raw %>% filter(X3 == "BEV")
+
+decision_factors$county <- decision_factors$X1
+decision_factors$fed_tax <- as.numeric(decision_factors$`How important were each of the following factors in making it possible for you to acquire a PEV?`)
+decision_factors$state_reb <-as.numeric(decision_factors$X8)
+decision_factors$lease <- as.numeric(decision_factors$X9)
+decision_factors$work_charge <- as.numeric(decision_factors$X10)
+decision_factors$other <- as.numeric(decision_factors$X11)
+
+decision_factors_work_charge <- data.frame(xtabs(~ county + work_charge, data=decision_factors))
+
+#making wide data frame with responses for each in columns
+decision_factors_work_charge_wide <- spread(decision_factors_work_charge,work_charge,Freq)
+
+decision_factors_work_charge_wide$total <- decision_factors_work_charge_wide$`1` + decision_factors_work_charge_wide$`2` + decision_factors_work_charge_wide$`3` + decision_factors_work_charge_wide$`4` + decision_factors_work_charge_wide$`5`
+
+decision_factors_work_charge_wide$`4_5` <- decision_factors_work_charge_wide$`4` + decision_factors_work_charge_wide$`5`
+
+decision_factors_work_charge_wide$perc4_5 <- decision_factors_work_charge_wide$`4_5`/decision_factors_work_charge_wide$total
+
+decision_factors_work_charge_wide$county <- as.character(decision_factors_work_charge_wide$county)
+
+#joining with average percentage of chargers in use
+#looking at hour_12, weekday
+work_charge_hour12_weekday <- left_join(decision_factors_work_charge_wide,CA_Station_Status_by_county_hour12_weekday, by = c("county" = "County"))
+
+work_charge_hour16_weekday <- left_join(decision_factors_work_charge_wide,CA_Station_Status_by_county_hour16_weekday, by = c("county" = "County"))
+
+#Include in Presentation
+ggplot(data=work_charge_hour12_weekday, aes(x=Perc_in_use, y=perc4_5)) + geom_text(aes(label=county), size=3, check_overlap = TRUE)+ ylab("% with access to workplace charging") + xlab("Avg. % of chargers in use at 12PM, weekday") + ggtitle("Access to workplace charging vs. public charging")  + theme_minimal() + geom_smooth()
+
+```
+
+#Trying to do predictions of EV charging status availability 
+```{r Trying to do predictions of EV charging status}
+#Setup
+# library(MASS) 
+# library(glmnet) 
+# library(modelr) 
+# library(broom) 
+# 
+# set.seed(8675309) 
+# 
+# #can skip to this to get processed Status file: hourly charging status by zip code, weekend, charger type
+# CA_Station_Status4_zip <- readRDS("CA_Station_Status4_zip.rds")
+# 
+# #Subsetting a training set and a holdout set
+# training_examples <- 1:nrow(CA_Station_Status4_zip) %in% sample(1:nrow(CA_Station_Status4_zip), 0.9*nrow(CA_Station_Status4_zip), replace = FALSE)
+# 
+# ca_training <- CA_Station_Status4_zip[training_examples, ]
+# ca_holdout <- CA_Station_Status4_zip[!training_examples, ]
+# 
+# mod_linear <- lm(plugs_available ~ Hour.f + zip_code.f + Charger_type.f + weekend.f, data = ca_training)
+# 
+# # check model fit
+# summary(mod_linear)
+# rmse(mod_linear)
+# # get predicted availability
+# predicted_avail_linear <- predict(mod_linear)
+# 
+# ca_training$predicted_avail_rounded <- round(predicted_avail_linear, 0)
+# # table(predicted_scores_rounded)
+# 
+# calibration <- ca_training %>% group_by(predicted_avail_rounded) %>%
+#                     summarize(freq = mean(plugs_available), count = n())
+# 
+# calibration
+# 
+# # calibration plot
+# ggplot(calibration, aes(x = predicted_avail_rounded, y = freq)) + geom_abline(col = 2) + geom_point(aes(size=count)) + theme_minimal() +
+#     labs(x = "Predicted Available Chargers", y = "Average Available Chargers")
+# 
+# ## Accuracy
+# accuracy <- mean(ca_training$plugs_available == ca_training$predicted_avail_rounded)
+# 
+# round(accuracy, 3)
+# 
+# ## Precision
+# #Percent of "positive" predictions that are *true*. 
+# precision <- mean(ca_training$plugs_available[ca_training$predicted_avail_rounded == 1])
+# 
+# round(precision, 3)
+
+
+```
+
