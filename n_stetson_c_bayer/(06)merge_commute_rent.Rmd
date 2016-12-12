@@ -1,0 +1,222 @@
+---
+title: "Merging Rental Data"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#install.packages('tidyverse')
+library(tidyverse)
+
+```
+
+
+Remove from rent data outside of TAZ area
+```{r}
+# Remove rentals outside of the MTC zones
+rents <- read_csv('Data/rentals_with_tazIDs.csv')
+
+rents$rent <- as.integer(rents$rent)
+
+rents_filtered <- rents %>% filter(!is.na(taz_key), rent <10000)
+
+rents_filtered$rent <- as.integer(rents_filtered$rent)
+```
+
+Remove outliers for commtue time
+```{r}
+commute_times <- read_csv('Data/commute_times.csv')
+
+# Find out the 99th percentile of results
+o <- quantile(commute_times$opt_time, probs=.99, na.rm=T)
+# 3655.12
+p <- quantile(commute_times$pes_time, probs=.99, na.rm=T)
+# 4983.42
+t <- quantile(commute_times$transit_time, probs=.99, na.rm=T)
+# 14917.46
+
+# filter data
+commute_times <- commute_times %>%
+                          filter(commute_times$opt_time < o,
+                                 commute_times$pes_time < p,
+                                 commute_times$transit_time < t)
+
+
+```
+
+Rearrange commute data into average commute times per zone
+```{r}
+
+commute_times <- commute_times %>%
+                mutate( avg_driving = .5 * (opt_time + pes_time))
+
+total_commutes <- commute_times %>% 
+                  group_by(HomeTAZfactor) %>%
+                  summarise(taz_driving = round(weighted.mean(avg_driving, n)/60), 
+                            taz_transit = round(weighted.mean(transit_time, n)/60),
+                            commuter_count = sum(n)) 
+
+zone_key <- read_csv('Data/zone_district_key.csv') %>% 
+            mutate(HomeTAZfactor = taz_key) %>%
+            mutate(home_superD = SUPERD) %>%
+            select(-X1, -taz_key, -SUPERD) 
+
+total_commutes <- left_join(total_commutes, zone_key, by='HomeTAZfactor')
+```
+
+Create a cost of commuting variable
+```{r}
+# Overall average driving and commute times
+# (Not necessary for future steps but out of curiosity)
+averge_driving <- weighted.mean(total_commutes$taz_driving, taz_commutes$commuter_count)
+averge_transit <- weighted.mean(total_commutes$taz_transit, taz_commutes$commuter_count)
+
+# Max times to create index
+max_driving <- max(total_commutes$taz_driving)
+max_transit <- max(total_commutes$taz_transit)
+
+# Median earnings in the last 12 months per individual working full time
+# $61,846
+# Number of working hours per year 
+# 2,080
+median_minute_wage = (61846/2080)/60
+
+# commute cost per month = minutes commuting one way * 40 commutes /month * minute_wage
+# from PPIC ~25% take public transit
+total_commutes  <- total_commutes %>%
+                  mutate(commute_cost = round(
+                          .75*(taz_driving * 40 * median_minute_wage) + 
+                            .25*(taz_transit  * 40 * median_minute_wage)
+                            ))
+                 
+```
+
+
+For regressions, add commute data to rent data, matching by zone.
+```{r}
+
+# Merge total_commutes with rents_filtered by taz_key
+rents_selected <- rents_filtered %>% select(-X1, -GEO_ID2_x, -GlobalID_x, -OBJECTID_x,
+                                            -index_right_x, -COUNT, -ShapeSTAre_x, -ShapeSTLen_x,
+                                            -Minority_7_y, -OBJECTID_y, -ShapeSTAre_y, -ShapeSTLen_y,
+                                            -COUNTY, -geometry_y, -index_right_y, -AREALAND, -AREAWATER,
+                                            -LANDACRE, -WATERACRE, -GEO_ID2_y, -geometry_y, -GlobalID_y,
+                                            -geometry_x, -CoCFlag_x, -Minority_7_x, -LowInc_30_x,
+                                            -LowInc_30_y, -index) 
+
+names(total_commutes)[names(total_commutes) == 'HomeTAZfactor'] = 'taz_key'
+
+names(rents_selected)[names(rents_selected) == 'TOTPOP2000'] = 'TOTPOP2000_superD'
+
+rents_with_commutes <- left_join(rents_selected, total_commutes, by='taz_key')
+
+
+rents_with_commutes <- rents_with_commutes %>%
+                        mutate(com_rent_costs = commute_cost_median + rent) %>%
+                        mutate(commute_rent_index = round(
+                          com_rent_costs/ max(com_rent_costs, na.rm =T),2)
+                        )
+
+write_csv(rents_with_commutes, 'Data/rents_with_commutes.csv')
+
+
+```
+
+The reverse, for mapping: add aggregated rent data to zone.
+```{r}
+
+rents_by_taz <- rents_with_commutes %>%
+                group_by(taz_key) %>%
+                summarise(median_rent = median(rent),
+                          median_rentsqft = median(rent_sqft),
+                          no_of_rentals =n())
+  
+
+rents_by_taz <- left_join(rents_by_taz, total_commutes, by='taz_key')
+
+
+rents_by_taz <- rents_by_taz %>%
+                        # commute and rent costs
+                        mutate(all_costs = commute_cost_median + median_rent) %>%
+                        # commute and rent index
+                        mutate(all_index = round(
+                            100*(all_costs/ max(all_costs, na.rm =T))
+                            )
+                        ) %>%
+                        # commute index
+                        mutate(com_index = round(
+                            100*(commute_cost_median/ max(commute_cost_median, na.rm =T))
+                            )
+                        ) %>%
+                        # rent index
+                         mutate(rent_index = round(
+                            100*(median_rent/ max(median_rent, na.rm =T))
+                            )
+                        )
+                        
+
+write_csv(rents_by_taz, 'Data/rents_and_commutes_by_zone.csv')
+```
+
+
+Dataset for method illustration
+```{r}
+
+## this section creates a dataset that we can use to visualize our method
+## once made into a shapefile of lines, we can show how one zone
+## commutes, illustrating how we create avg commute times.
+
+ total_commutes_taz2super <- commute_times %>% 
+                           group_by(HomeTAZfactor, superD_dest) %>%
+                            summarise(taz_driving = round(weighted.mean(avg_driving, n)/60), 
+                             taz_transit = round(weighted.mean(transit_time, n)/60),
+                            commuter_count = sum(n),
+                            home_lat = min(home_lat),
+                            home_lon = min(home_lon))  
+ 
+super_centroids <- read_csv('Data/superD_Wcentroids.csv')
+names(super_centroids)[names(super_centroids) == 'SUPERD'] <- 'superD_dest'
+names(super_centroids)[names(super_centroids) == 'mean_lat'] <- 'dest_lat'
+names(super_centroids)[names(super_centroids) == 'mean_lon'] <- 'dest_lon'
+total_commutes_taz2super <- left_join(total_commutes_taz2super, super_centroids, by='superD_dest')
+
+write_csv(total_commutes_taz2super, 'Data/taz_to_super_illustration.csv')
+
+```
+
+Regressions
+```{r}
+ library(stargazer)
+
+# Create a weighted commute variable
+rents_with_commutes$wtd_taz_commute <- .75*rents_with_commutes$taz_driving +  .25*rents_with_commutes$taz_transit
+
+# CReate commute^2
+rents_with_commutes$wtd_taz_commute2 <- rents_with_commutes$wtd_taz_commute^2
+
+# Regressions
+
+m1 <- lm(rent~taz_driving +  bedrooms +sqft +CoCFlag_y + commuter_count, data=rents_with_commutes)
+m2 <- lm(rent~taz_transit + bedrooms + sqft +CoCFlag_y + commuter_count, data=rents_with_commutes)
+m3 <- lm(rent~wtd_taz_commute + bedrooms + sqft +CoCFlag_y + commuter_count, data=rents_with_commutes)
+m4 <- lm(rent~wtd_taz_commute + wtd_taz_commute2 + bedrooms + sqft +CoCFlag_y + commuter_count, data=rents_with_commutes)
+
+
+# The following code creates a html table for presentation
+
+# stargazer(m1, m2, m3, m4,
+#           digits = 2,
+#           type='html',
+#           out="models.htm",
+#           dep.var.labels = 'Rent',
+#           covariate.labels = c("Driving Time", "Tranist Time", "Weighted Commute Time",
+#                                "Squared Weighted Commute Time", "Bedrooms", "Square Feet",
+#                                'Community of Concern Flag', 'Commuter Count'),
+#           omit.stat = c("rsq", "f","ser"))
+          
+
+#Please cite as: 
+
+# Hlavac, Marek (2015). stargazer: Well-Formatted Regression and Summary Statistics Tables.
+ #R package version 5.2. http://CRAN.R-project.org/package=stargazer 
+```
+
