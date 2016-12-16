@@ -1,0 +1,361 @@
+---
+title: "Random Forests and HMDA LAR Data"
+output: html_notebook
+---
+## Script Parameters 
+
+```{r script parameters}
+# require(tidyverse)
+# require(randomForest)
+
+# Input File Name
+INPUT_FILENAME <- "bay_hmda_lar_all_12_15.csv"
+
+# Race Neutral Plot Name
+RN_PLOT_NAME <- "bay1215rn.png"
+
+# Race Included Plot Name
+RINC_PLOT_NAME <- "bay1215rinc.png"
+
+# minimum percentage of NAs a given variable can have for
+# a given census tract
+
+MAX_NA_PERCENT <- 0.2
+
+# minimum number of POSSIBLE covariates per census tract prediction
+RANKS <- 5
+
+# minimum number of records for a census tract to be included
+MINIMUM_CT_RECORDS <- 100
+
+# size of the training set for random forests
+TRAINSET_SIZE <- 0.7
+
+# the minimum number of covariates used for modeling ranks must 
+# equal the number of ranks into which you wish to divide the output
+MINIMUM_COVARIATES <- RANKS
+
+# if true, output will print the name of each census tract
+# after the random forest is fit to its data
+TRACK_PROGRESS <- TRUE
+```
+
+## Functions
+
+```{r utility functions}
+# utility functions to remove all one-level factors and
+# variables with more than NA_PERCENT percent missing data (NA_PERCENT defined above)
+
+rename_na_vars <- function(col_name, df) {
+   
+   na_proportion <- sum(is.na(df[[col_name]])) / length(df[[col_name]])
+   
+   if (na_proportion > MAX_NA_PERCENT) {
+      
+      return(str_c("nas_", col_name))
+   
+   }
+   
+   return(col_name)
+   
+}
+
+rename_one_l_vars <- function(col_name, df) {
+   
+   factor_levels <- nlevels(as.factor(df[[col_name]]))
+   
+   if (factor_levels < 2) {
+      
+      return(str_c("one_l_", col_name))
+      
+   }
+      
+      return(col_name)
+}
+```
+
+```{r model fitting function}
+make_ct_rf <- function(census_tract, data = INPUT_DATA, 
+                       allow_race = FALSE,
+                       track_progress = TRACK_PROGRESS) {
+   
+   # filters to census tract level
+   model_data <- data %>% filter(census_tract_number == census_tract)
+   
+   # removes race/ethnicity data
+   
+   if (!allow_race) {
+      model_data <- model_data %>% select(-contains("applicant_race"),
+                                          -contains("ethnicity"),
+                                          -minority_population)
+   }
+   
+   # removes all columns with too many NAs
+   names(model_data) <- sapply(names(model_data), rename_na_vars, df = model_data)
+   model_data <- model_data %>% select(-starts_with("nas_"))
+   
+   # removes all one-level vactors
+   names(model_data) <- sapply(names(model_data), rename_one_l_vars, df = model_data)
+   
+   # tests whether race will be dropped at this step
+   if (allow_race) {
+      race_dropped <- has_name(model_data, "one_l_applicant_race_name_1")
+      }
+   
+   model_data <- model_data %>% select(-starts_with("one_l_"))
+   
+   # light error handling
+   if (ncol(model_data) < MINIMUM_COVARIATES) {
+      print("fewer than minimum covariates")
+      return("fewer than minimum covariates")
+   }
+
+
+   # pre-converts all strings to factors
+   i <- sapply(model_data, is.character)
+   model_data[i] <- lapply(model_data[i], as.factor)
+   
+   mmy <- as.factor(model_data$accepted)
+   
+   # imputes missing data
+   
+   if (anyNA(model_data, recursive = TRUE)) {
+      # sink() suppresses awful print output
+      sink(file = "/dev/null")
+      model_data <- rfImpute(x = as.data.frame(model_data %>% select(-accepted)), 
+                                y = mmy, 
+                                data = model_data)[, -1]
+      
+      mmx <- model.matrix( ~ . , data = model_data)
+      sink()
+   } else {
+      mmx <- model.matrix(accepted ~ . , data = model_data)[, -1]
+   }
+   
+   # divides training and test sets
+   training_ind <- sample(1:nrow(mmx), round(nrow(mmx) * TRAINSET_SIZE))
+   
+   train_x <- mmx[training_ind,]
+   test_x <- mmx[-training_ind,]
+   train_y <- mmy[training_ind]
+   test_y <- mmy[-training_ind]
+   
+   # estimate and return a random forest!
+   sink(file = "/dev/null")
+   ct_rf <- randomForest(x = train_x, y = train_y,
+                         xtest = test_x, ytest = test_y,
+                         keep.forest = FALSE)
+   sink()
+   
+   # to track progress
+   if (track_progress) {
+      cat(str_c(census_tract, " "))
+   }
+      
+   # converts output to variable importance matrix
+   ct_rf <- importance(ct_rf, type = 2)
+      
+   if (allow_race) {
+         return(list(rf = ct_rf, race_dropped = race_dropped))
+      }
+   
+   return(ct_rf)
+}
+
+```
+
+#### Data Preparation Function
+
+```{r data prep function}
+# function for extracting the top N variables in terms of 
+# importance from the list of rf importance tables
+get_topN_imp <- function(list_item, N = RANKS,
+                                race_neutral = TRUE) {
+   if (!race_neutral){
+      list_item <- list_item[["rf"]]
+   }
+   
+   imp <- tibble(vars = names(list_item[-1, ]),
+                 imp = list_item[-1, ]) %>%
+          arrange(imp) %>% head(N)
+   imp <- imp[["vars"]]
+   names(imp) <- str_c("Rank", as.character(1:N))
+   return(imp)
+}
+```
+
+## Step 1 - Data Cleaning
+
+```{r load data, cache = TRUE, message = FALSE}
+# input filename is defined above
+INPUT_DATA_raw <- read_csv(INPUT_FILENAME, col_types = cols(census_tract_number = "c",
+                                                            rate_spread = "n", 
+                                                            respondent_id = "c"))
+```
+
+```{r data cleaning for model prediction}
+state_cty_fips <- read_csv("state_cty_fips.csv", col_types = cols(`FIPS Code` = "c"))
+
+state_cty_fips <- state_cty_fips %>% filter(State %in% INPUT_DATA_raw$state_name)
+
+# filters for purchase loans, 
+# owner-occupied homes, and
+# applications with lien status information
+# and removes NA census tracts
+
+# converting census tracts into full, unique references
+INPUT_DATA_raw <- INPUT_DATA_raw %>% mutate(county_name = str_replace(county_name, 
+                                                                      " County", ""))
+# getting the counties for later mapping
+ZOOM_COUNTIES <- (state_cty_fips %>% filter(`County Name` %in% INPUT_DATA_raw$county_name) %>%
+                                    select(`FIPS Code`))[[1]]
+
+ZOOM_COUNTIES <- str_replace(ZOOM_COUNTIES, "0", "")
+
+INPUT_DATA <- left_join(INPUT_DATA_raw, 
+                        state_cty_fips, 
+                        by = c("county_name" = "County Name")) %>%
+              select(-State)
+
+# filtering for purchase loans, not-applicable lien status, and loans for owner-occupancy
+INPUT_DATA <- INPUT_DATA %>% filter(loan_purpose_name == "Home purchase",
+                                    lien_status_name != "Not applicable",
+                                    owner_occupancy_name == "Owner-occupied as a principal dwelling",
+                                    !is.na(census_tract_number))
+
+# finding small census tracts after filtering
+input_small <- INPUT_DATA %>% group_by(census_tract_number) %>% 
+                              dplyr::summarize(count = n()) %>%
+                              mutate(small = ifelse(count < MINIMUM_CT_RECORDS, 
+                                                    census_tract_number, "large")) %>%
+                              filter(small != "large")
+                                        
+                                 # removes census tracts with few mortgage applications
+INPUT_DATA <- INPUT_DATA %>% filter(!(census_tract_number %in% input_small$small)) %>%
+                             mutate(census_tract_number = str_c(`FIPS Code`, 
+                                                                census_tract_number)) %>%
+                              # formats CT numbers correctly
+                             mutate(census_tract_number = str_replace_all(census_tract_number,
+                                                                          "\\.", "")) %>%
+                              # removing variables with single values or that cause problems
+                             select(-state_name, -state_abbr, 
+                                    -sequence_number, -edit_status_name, 
+                                    -msamd_name, -starts_with("denial"),
+                                    -agency_abbr, -county_name, -respondent_id,
+                                    -application_date_indicator, -`FIPS Code`)
+
+                             # removes all extra race columns, which are sparsely populated
+INPUT_DATA <- INPUT_DATA %>% select(-contains("race_name_2"), -contains("race_name_3"), 
+                                    -contains("race_name_4"), -contains("race_name_5"))
+
+rm(INPUT_DATA_raw)
+```
+
+```{r creating response variable}
+# adding column for "mortgage accepted" variable
+INPUT_DATA <- INPUT_DATA %>% mutate(accepted = ifelse(action_taken_name == "Loan originated", 
+                                                      1, 0)) %>%
+                             select(-action_taken_name, # not interested in reasons for failure
+                                    -as_of_year) # removing as_of_year as predictor in this step
+                              
+```
+
+## Step 2 - Fitting the Models
+
+```{r fitting census tract models, cache = TRUE, message = TRUE, results = "hide"}
+# NOTE: this code chunk estimates models for census tracts
+# at a rate of approximately 15 trees per minute on a 
+# standard 2014 MacBook Air. Since it estimates race-neutral
+# and race-conscious models, the number of trees is 2X the number
+# of unique census tracts after the cleaning steps above. Use with caution.
+
+# stores a sorted vector of individual census tract numbers
+census_tracts <- sort(unique(INPUT_DATA$census_tract_number))
+
+# race neutral models
+race_neut_rf <- sapply(census_tracts, make_ct_rf, simplify = FALSE)
+# race included models
+race_inc_rf <- sapply(census_tracts, make_ct_rf, allow_race = TRUE, simplify = FALSE)
+
+# names the output list of random forests for their census tracts
+names(race_neut_rf) <- census_tracts
+names(race_inc_rf) <- census_tracts
+
+```
+
+```{r calculating the proportion dropped}
+# calculate proportion in which race was 
+# dropped because it was a single-level factor or it had too many NAs
+DROPPED_PROP <- 0
+
+for (i in race_inc_rf) {
+   was_dropped <- i[[2]][[1]]
+   if (was_dropped) {
+      DROPPED_PROP <- DROPPED_PROP + 1
+   }
+}
+
+# the total number dropped divided by the no. of census tracts
+DROPPED_PROP <- DROPPED_PROP / length(census_tracts)
+```
+
+## Step 3 - Analysis of Variable Importance
+
+```{r importance analysis}
+# applying above function to lists of variable importance
+race_neut_ranks <- t(sapply(race_neut_rf, get_topN_imp))
+race_inc_ranks <- t(sapply(race_inc_rf, get_topN_imp, race_neutral = FALSE))
+
+# converting to tibbles and reshaping for plotting
+race_neut_ranks <- as_tibble(race_neut_ranks) %>% 
+                        gather(key = "rank", value = "varname") %>%
+                        group_by(varname, rank) %>%
+                        summarize(number = n())
+                        
+
+race_inc_ranks <- as_tibble(race_inc_ranks)  %>% 
+                        gather(key = "rank", value = "varname") %>%
+                        group_by(varname, rank) %>%
+                        summarize(number = n())
+```
+
+#### Step 4 - Plotting
+
+```{r freq plot for race neutral, message = FALSE, warning = FALSE, results = "asis"}
+RANK_NAMES <- as.character(1:RANKS)
+
+ggplot(data = race_neut_ranks,
+       mapping = aes(x = fct_reorder(varname, number, sum), y = number, fill = rank)) +
+       geom_histogram(stat = "identity") + 
+       scale_x_discrete(name = "Variable") +
+       scale_y_continuous(name = str_c("Number of Top ", 
+                                       as.character(RANKS),
+                                       " Appearances")) +
+       scale_fill_discrete(name = "Rank", labels = RANK_NAMES) +
+       theme_minimal() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + 
+       coord_flip()
+
+ggsave(RN_PLOT_NAME)
+```
+
+```{r freq plot for race included, message = FALSE, warning = FALSE, results = "asis"}
+ggplot(data = race_inc_ranks,
+       mapping = aes(x = fct_reorder(varname, number, sum), y = number, fill = rank)) +
+       geom_histogram(stat = "identity") + 
+       scale_x_discrete(name = "Variable") +
+       scale_y_continuous(name = str_c("Number of Top ", 
+                                       as.character(RANKS),
+                                       " Appearances")) +
+       scale_fill_discrete(name = "Rank", labels = RANK_NAMES) +
+       theme_minimal() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+       coord_flip()
+
+ggsave(RINC_PLOT_NAME)
+```
+
+## Step 5 - Save Random Forest/Importance Results as RData
+
+```{r saving predictions/importance results}
+save(race_inc_rf, file = "race_inc_rf.RData")
+save(race_neut_rf, file = "race_neut_rf.RData")
+```
