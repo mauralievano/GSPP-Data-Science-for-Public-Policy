@@ -1,0 +1,680 @@
+---
+title: "Updated code"
+author: "Keith Welch and Taylor Meyers"
+date: "12/15/2016"
+output: html_document
+---
+
+Read in data and create a dataset that removes observations missing education data
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(stringr) 
+library(forcats)
+library(foreign)
+library(haven)
+library(lubridate)
+library(broom)
+library(ISLR)
+library(modelr)  
+library(ROCR)
+library(randomForest)
+
+
+workforce_full <- read_dta("full_workforce_file.dta")
+
+# sort data frame by employee id and fiscal year and filter out unnecessary data
+workforce <- workforce_full %>%
+  arrange(jobemplid, fiscal_year) %>%
+  filter(fiscal_year >2001 & fiscal_year < 2017) %>%
+  mutate(fiscal_year = as.integer(fiscal_year)) %>%
+  group_by(jobemplid) %>%
+  mutate(missing_data = as.numeric(language_descr=="")) %>%
+  filter(missing_data != 1)
+
+workforce <- workforce %>%
+  ungroup() %>%
+  mutate(language_descr = ifelse(language_descr == "", NULL, language_descr),
+         language_descr = factor(language_descr))
+
+
+```
+
+Create degree achieved dummy variables
+```{r education experience}
+
+workforce <- workforce %>%
+  mutate(bachelor_temp = as.numeric(str_detect(degreedescr, "Bachelor")),
+         master_temp = as.numeric(str_detect(degreedescr, "Master"))) %>%
+  group_by(jobemplid) %>%
+  mutate(bachelor = max(bachelor_temp),
+         master = max(master_temp))
+
+```
+
+Create language variables
+```{r language variables}
+# create number of languages spoken variable and dummies
+workforce <- workforce %>%
+  group_by(jobemplid) %>%
+  mutate(number_languages = n_distinct(language_descr))
+
+workforce <- workforce %>%
+  mutate(one_language = as.numeric(number_languages == 1),
+         two_languages = as.numeric(number_languages == 2),
+         three_language = as.numeric(number_languages == 3),
+         four_above_language = as.numeric(number_languages > 3))
+
+# function to create language dummies
+create_language_dummy <- function(language, data) {
+
+  temp <- data %>%
+  group_by(jobemplid) %>%
+  mutate(language = max(as.numeric(language_descr == language)))
+
+  return(temp$language)
+
+}
+languages <- levels(workforce$language_descr)
+
+language_dummies <- sapply(languages, create_language_dummy, 
+                           data = workforce)
+
+language_dummies <- tbl_df(language_dummies)
+
+workforce <- bind_cols(workforce, language_dummies)
+
+# rename NULL and Sign Language variables (assuming that NULL indicates English Only)
+workforce$English_Only <- workforce$'NULL'
+workforce$'NULL' <- NULL
+workforce$Sign_Language <- workforce$'Sign Language'
+workforce$'Sign Language' <- NULL
+
+
+```
+
+Create a variable to identify teachers and variables related to job description
+```{r teacher variable}
+workforce <- workforce %>%
+  mutate(teacher_obs = as.numeric(jobdescr == "Adapted PE Teacher"
+                              | jobdescr == "Bilingual Classroom Teacher"
+                              | jobdescr == "Dept Head / Classroom Teacher"
+                              | jobdescr == "ESL Teacher"
+                              | jobdescr == "ESL/Bilingual Teacher"
+                              | jobdescr == "Eld Classroom Teacher"
+                              | jobdescr == "Homebound / Hospital Svcs Tchr"
+                              | jobdescr == "Itinerant Dance Teacher"
+                              | jobdescr == "Itinerant Drama Teacher"
+                              | jobdescr == "Itinerant Music Teacher"
+                              | jobdescr == "Itinerant Visual Art Teacher"
+                              | jobdescr == "Mild/Mod RS/SDC (No Autism)"
+                              | jobdescr == "Mild/Mod Tchr SDC Only"
+                              | jobdescr == "Mild/Mod Tchr SDC Only (No Au)"
+                              | jobdescr == "Mild/Moderate RS/SDC"
+                              | jobdescr == "Moderate/Severe RS/SDC"
+                              | jobdescr == "Orientation Mobility Tch Only"
+                              | jobdescr == "Orthopedically Impaired RS/SDC"
+                              | jobdescr == "Peer Resource Teacher"
+                              | jobdescr == "Prop \"A \"Sub Teacher"
+                              | jobdescr == "ROTC Teacher"
+                              | jobdescr == "Regular Classroom Teacher"
+                              | jobdescr == "Resource Teacher"
+                              | jobdescr == "Secondary Art Teacher"
+                              | jobdescr == "Secondary Music Teacher"
+                              | jobdescr == "TSA - Physical Education"
+                              | jobdescr == "Teacher Sab Leave"
+                              | jobdescr == "Teacher Special Assign"
+                              | jobdescr == "Teacher/Resource Teacher"
+                              | jobdescr == "Technical Resource Tch"
+                              | jobdescr == "Transitional KG Teacher"
+                              | jobdescr == "Vis. Impr. & Orient. Mob. Tchr"
+                              | jobdescr == "Visual Impairment Tchr"))
+
+# generate a teacher variable that shows if any of a teacher's observations for a given fiscal year are a teacher job description
+workforce <- workforce %>%
+  group_by(jobemplid, fiscal_year) %>%
+  mutate(teacher = max(teacher_obs)) %>%
+  arrange(jobemplid, fiscal_year) 
+
+
+# generate dummy variable that is equal to one if the employee was ever a teacher
+workforce <- workforce %>%
+  group_by(jobemplid) %>%
+  mutate(ever_teacher = max(teacher_obs))
+
+# generate variable that counts how many job descriptions teachers have each year and corresponding dummies
+workforce <- workforce %>%
+  group_by(jobemplid, fiscal_year) %>%
+  mutate(n_job_descriptions = length(unique((jobdescr[!is.na(jobdescr)]))))
+
+workforce <- workforce %>%
+  mutate(one_jobdesc = as.numeric(n_job_descriptions == 1),
+         two_jobdesc = as.numeric(n_job_descriptions == 2),
+         three_jobdesc = as.numeric(n_job_descriptions == 3),
+         four_above_jobdesc = as.numeric(n_job_descriptions > 3))
+
+
+```
+
+Create variables related to employee license type
+```{r license type}
+# create a license type variable
+workforce <- workforce %>%
+  mutate(license_temp = if_else(teacher_obs == 1, license_type_descr, NULL))
+
+# Variable that counts how many licenses teachers have in each fiscal year and corresponding dummies
+workforce <- workforce %>%
+  group_by(jobemplid, fiscal_year) %>%
+  mutate(n_licenses = length(unique((license_temp[!is.na(license_temp)]))))
+
+workforce <- workforce %>%
+  mutate(one_n_licenses = as.numeric(n_licenses == 1),
+         two_n_licenses = as.numeric(n_licenses == 2),
+         three_n_licenses = as.numeric(n_licenses == 3),
+         four_n_licenses = as.numeric(n_licenses == 4),
+         five_above_n_licenses = as.numeric(n_licenses > 4))
+```
+
+Create a variable identifying full time employees
+```{r FTE dummy}
+workforce <- workforce %>%
+  mutate(FTE_dummy = as.numeric(fte >= 1))
+```
+
+Create a variable identifying teachers with emergency or provisional credentials
+```{r emergency credential variable}
+# # create a dummy variable that is equal to 1 for all observations in each year that a teacher has an emergency or provisional credential (unless the teacher also has a clear credential in that same year
+workforce <- workforce %>%
+  group_by(jobemplid, fiscal_year) %>%
+  mutate(prov_emerg_cred = max(as.numeric(str_detect(credential_term, "Provisional") |
+                                               str_detect(credential_term, "Emergency"))))
+```
+
+Transform dataset to panel format
+```{r transform dataset to panel format}
+workforce_panel <- workforce %>%
+  group_by(jobemplid, fiscal_year) %>%
+  distinct(.keep_all = TRUE) %>%
+  filter(ever_teacher == 1)
+```
+
+Create variables that identify whether a teacher left the district
+```{r left district variables}
+# create variables to indicate whether a teacher left the district or switched to a non-teaching job
+workforce_panel <- workforce_panel %>%
+  ungroup() %>%
+  mutate(fiscal_year = as.integer(fiscal_year)) %>%
+  mutate(last_entry = as.numeric(
+    lead(jobemplid) != jobemplid)) %>%
+  mutate(left_district = as.numeric((last_entry == 1 & fiscal_year != 2016) | 
+                                      ((((lead(fiscal_year) - fiscal_year)) > 1) & 
+                                         last_entry == !1 & 
+                                         (lead(jobemplid) == jobemplid)))) %>%
+  mutate(changed_to_non_teaching_job = as.numeric(
+    ((lead(teacher) - teacher) == -1) &
+      (left_district != 1 &
+      lead(jobemplid) == jobemplid)))
+      
+      
+# create a dummy variable indicating whether a teacher went on a "leave of absence" if they left the district and then returned 
+workforce_panel <- workforce_panel %>%
+  group_by(jobemplid) %>%
+  mutate(leave_absence = as.numeric(left_district - last_entry == 1))
+
+
+```
+
+Create variables that identify whether a teacher resigned from the district 
+```{r resignation dummy}
+workforce_panel <- workforce_panel %>%
+   mutate(resignation_temp = as.numeric(action_reasondescr == "Resignation" |
+                  action_reasondescr == "Relocation" |
+                  action_reasondescr == "Personal Reasons" |
+                  action_reasondescr == "Resign Employed by Other  Distr" |
+                  action_reasondescr == "Failure to Return from Leave" |
+                  action_reasondescr == "San Francisco City & County" |
+                  action_reasondescr == "Dissatisfied w/Work Conditions" |
+                  action_reasondescr == "Return to School" | 
+                  action_reasondescr == "Resign Change Of Profession" |
+                  action_reasondescr == "Resign Quit without Cause" |
+                  action_reasondescr == "Job Abandonment" |
+                  action_reasondescr == "Resign Care Of Children" |
+                  action_reasondescr == "Resign Non Reelect" |
+                  action_reasondescr == "Resign Dissatisfy Work Conditi" |
+                  action_reasondescr == "Resign Teaching Out Of USA" |
+                  action_reasondescr == "Health Reasons" |
+                  action_reasondescr == "Rsgn Stlmnt Agmt Certs" |
+                  action_reasondescr == "Cost-of Living" |
+                  action_reasondescr == "Dissatisfied with Pay" |
+                  action_reasondescr == "Family Reasons" |
+                  action_reasondescr == "Resign Personal Reasons" |
+                  action_reasondescr == "Rsgn Per Settlement Agmt" |
+                  action_reasondescr == "Illness in Family" |
+                  action_reasondescr == "Resign Joining Spouse" |
+                  action_reasondescr == "Child/House Care" |
+                  action_reasondescr == "Dissatisfied w/Type of Work" |
+                  action_reasondescr == "Conversion Retirement" |
+                  action_reasondescr == "Dissatisfied w/Comp. Policies" |
+                  action_reasondescr == "Marriage" |
+                  action_reasondescr == "Resign Maternity" |
+                  action_reasondescr == "Resignation-Other Position" |
+                  action_reasondescr == "Transfer to City & County" |
+                  action_reasondescr == "Transportation Problems"),
+          resignation = as.numeric(resignation_temp == 1 & left_district == 1))
+
+# dummy to indicate whether a teacher ever resigned
+workforce_panel <- workforce_panel %>%
+  group_by(jobemplid) %>%
+  mutate(ever_resigned = max(resignation))
+
+```
+
+Create a non-school location variable
+```{r}
+## create vector of all schools that appear 30 times or less in panel to create an "other_location" variable
+workforce_panel <- workforce_panel %>%
+  ungroup() %>%
+  mutate(locationdescr = factor(locationdescr))
+
+other_locations <- workforce_panel %>%
+  group_by(locationdescr) %>%
+  summarise(number = sum(ever_teacher)) %>%
+  filter(number <= 30)
+
+other_location_names <- as.character(other_locations$locationdescr)
+
+## assign all non-school locations to "non-school location" as locationdescr
+
+non_school_loc_names <- c("Substitute Teachers",
+"Special Education Services" ,
+"Human Resources" ,
+"Summer School Department" ,
+"CAO - Curriculum Improvement" ,
+"Special Education Sub Paras" ,
+"Childrens Centers Substitutes" ,
+"Multilingual Pathways Dept" ,
+"Physical Education Department" ,
+"C&I Teaching & Learning" ,
+"Instructional Reform Network" ,
+"Elementary Schools" ,
+"CAO - Library Service" ,
+"CAREER TECHNICAL EDUCATION" ,
+"MUSIC - VISUAL & PERFORMING AR" ,
+"SFCSD - Pupil Services" ,
+"SFCSD-Cnseling & Social Servic" ,
+"Childrens Ctr. Administration" ,
+"SFCSD - Prevention" ,
+"Assessment & Accountability" ,
+"Teacher Support & Development" ,
+"Superintendent Of Schools" ,
+"Multiple Work Locations" ,
+"SuperintendentÃ¢Â€Â™s Zone-Bayview" ,
+"ELEM. INSTRUCTIONAL SUP. & OPS" ,
+"State & Federally-Funded Proje" ,
+"Middle Schools" ,
+"Chinese Education Center" ,
+"Spec Ed. Id And Assessment" ,
+"Gifted & Talented Edu. Office")
+  
+
+workforce_panel <- workforce_panel %>%
+  mutate(locationdescr = factor(locationdescr),
+         locationdescr_new = fct_collapse(locationdescr,
+                                          other_location = other_location_names,
+                                          non_school_location = non_school_loc_names))
+```
+
+Merge 2016 rental data by zip code
+```{r merge rental price data}
+# merge data (note that the data is from 2016)
+hud_rental_data <- read_csv("HUD_data.csv")
+hud_rental_data$postal <- hud_rental_data$POSTAL
+hud_rental_data$POSTAL <- NULL
+
+workforce_panel <- workforce_panel %>%
+  mutate(postal = as.integer(postal))
+
+workforce_panel <- left_join(workforce_panel, hud_rental_data, by = "postal")
+
+# dummy variable indicating whether 2016 median rent was less than $1500
+workforce_panel <- workforce_panel %>%
+  mutate(rent_0_1500 = as.numeric(median_rent < 1500))
+
+```
+
+Create home zip codes dummy variables
+```{r zip code dummies}
+# create dummy variables for the most frequently appearing zip codes (home address)
+## extract most common zip codes (all that appear 100 times or more in the workforce_panel set)
+zip_codes <- workforce_panel %>%
+  group_by(postal) %>%
+  summarize(number = sum(ever_teacher)) %>%
+  filter(number > 99 & !is.na(postal)) %>%
+  mutate(postal = factor(postal))
+
+common_zips <- levels(zip_codes$postal)
+common_zip_names <- paste(common_zips, "_home_zip", sep="")
+
+## function to create zip code dummies
+create_zip_dummy <- function(zip, data){
+  
+  temp <- data %>%
+    mutate(zip_code = as.numeric(postal == zip))
+  
+  return(temp$zip_code)
+}
+
+zip_dummies <- sapply(common_zips, create_zip_dummy, data = workforce_panel)
+
+zip_dummies <- tbl_df(zip_dummies)
+names(zip_dummies) <- common_zip_names
+
+workforce_panel <- bind_cols(workforce_panel, zip_dummies)
+
+workforce_panel <- workforce_panel %>%
+  mutate(other_home_zip = as.numeric('94014_home_zip' == 0 & 
+                                       '94015_home_zip' == 0 & 
+                                       '94044_home_zip' == 0 & 
+                                       '94066_home_zip' == 0 & 
+                                       '94080_home_zip' == 0 & 
+                                       '94102_home_zip' == 0 & 
+                                       '94103_home_zip' == 0 & 
+                                       '94107_home_zip' == 0 & 
+                                       '94109_home_zip' == 0 &
+                                       '94110_home_zip' == 0 & 
+                                       '94112_home_zip' == 0 & 
+                                       '94114_home_zip' == 0 & 
+                                       '94115_home_zip' == 0 & 
+                                       '94116_home_zip' == 0 & 
+                                       '94117_home_zip' == 0 & 
+                                       '94118_home_zip' == 0 & 
+                                       '94121_home_zip' == 0 & 
+                                       '94122_home_zip' == 0 &
+                                       '94123_home_zip' == 0 & 
+                                       '94124_home_zip' == 0 & 
+                                       '94127_home_zip' == 0 & 
+                                       '94131_home_zip' == 0 & 
+                                       '94132_home_zip' == 0 & 
+                                       '94133_home_zip' == 0 & 
+                                       '94134_home_zip' == 0 & 
+                                       '94608_home_zip' == 0 & 
+                                       '94609_home_zip' == 0 &
+                                       '94610_home_zip' == 0 & 
+                                       '94611_home_zip' == 0 & 
+                                       '94941_home_zip' == 0))
+
+```
+
+Create variables counting the number of years the teacher has taught in the district
+```{r years in district}
+
+workforce_panel <- workforce_panel %>%
+  mutate(temp = 1) %>%
+  group_by(jobemplid) %>%
+  mutate(district_years = cumsum(temp)) 
+
+workforce_panel <- workforce_panel %>%
+  mutate(one_district_year = as.numeric(district_years == 1),
+         two_district_year = as.numeric(district_years == 2),
+         three_district_year = as.numeric(district_years == 3),
+         four_district_year = as.numeric(district_years == 4),
+         five_above_district_year = as.numeric(district_years > 4)) %>%
+  mutate(above_3_district_year = as.numeric(district_years > 3))
+```
+
+Create teacher age variables
+```{r teacher age}
+workforce_panel$birth_year <- year(workforce_panel$birthdate)
+
+workforce_panel$age <- workforce_panel$fiscal_year - workforce_panel$birth_year
+
+workforce_panel <- workforce_panel %>%
+  mutate(age_under_30 = as.numeric(age < 30),
+         age_30_40 = as.numeric(age >= 30 & age < 40),
+         age_over_40 = as.numeric(age > 30))
+
+```
+
+Create year of entry into district variable
+```{r year of entry into district}
+workforce_panel <- workforce_panel %>%
+  ungroup() %>%
+  mutate(fiscal_year = as.integer(fiscal_year)) %>%
+  group_by(jobemplid) %>%
+  mutate(district_entry_date = min(fiscal_year)) %>%
+  mutate(district_entry_date = as.factor(district_entry_date))
+  
+```
+
+Create a variable indicating whether a teacher moved
+```{r whether teacher changed home addresses}
+workforce_panel <- workforce_panel %>%
+  ungroup() %>%
+  mutate(moved_house = as.numeric(
+    lag(address1) != address1) & (lag(jobemplid) == jobemplid))
+```
+
+Create a variable indicating whether a teacher is male
+```{r sex}
+workforce_panel <- workforce_panel %>%
+  mutate(male = as.numeric(sex == "M"))
+```
+
+Create race variables
+```{r race and ethnicity}
+#Race
+workforce_panel$xlatlongname <- as.factor(workforce_panel$xlatlongname)
+races <- levels(workforce_panel$xlatlongname)
+
+
+create_race_dummy <- function(race, data) {
+
+
+  temp <- data %>%
+  group_by(jobemplid) %>%
+  mutate(race = as.numeric(xlatlongname == race))
+
+
+  return(temp$race)
+
+
+}
+
+
+race_dummies <- sapply(races, create_race_dummy, 
+                           data = workforce_panel)
+
+
+race_dummies <- tbl_df(race_dummies)
+
+
+workforce_panel <- bind_cols(workforce_panel, race_dummies)
+
+# do some cleaning
+workforce_panel$Japanese <- NULL
+workforce_panel$Korean <- NULL
+workforce_panel$Samoan <- NULL
+workforce_panel$Vietnamese <- NULL
+
+```
+
+Create panel dataset for analysis
+```{r create workforce panel set for analysis}
+workforce_panel_analysis <- workforce_panel %>%
+  ungroup() %>%
+  mutate(locationdescr = factor(locationdescr),
+         postal = factor(postal),
+         factor_year = factor(fiscal_year),
+         jobemplid = factor(jobemplid)) %>%
+  select(-c(all_emplid,  first_name,  last_name,  applicant_id,  college_id,  collegedescr,  degree_id,  degreedescr,  gpa_overall,  major_id,  major,  teaching_degree,  total_hours,  expiration_date,  license_college_id,  licensecollege,  license_state,  license_status_id,  license_status_descr,  license_type_id,  license_type_descr,  license_type_text,  app_language_id,  language_id,  language_descr,  submitted_date,  submittedschoolyear,  effdate,  name,  job_entry_dt,  dept_entry_dt,  empl_rcd,  grade,  step,  jobcode,  jobdescr,  location,  locationdescr,  birthdate,  sex,  sfu_ethnicity,  empl_status,  action_reason,  action_reasondescr,  union_cd,  unionname,  fte,  address1,  address2,  city,  state,  postal,  uccal_emplid,  ethnic_group,  xlatlongname,  primary_indicator,  dist_pct,  credential_term,  valid_start,  valid_end,  unique_employee,  missing_data,  bachelor_temp,  master_temp,  number_languages,  ever_teacher,  n_job_descriptions,  license_temp,  n_licenses,  left_district,  resignation_temp,  ever_resigned,  temp,  district_years)) %>%
+  mutate(last_entry_temp = if_else(last_entry == 1, fiscal_year, NULL)) %>%
+  group_by(jobemplid) %>%
+  mutate(last_entry_grouped = max(last_entry_temp, na.rm = TRUE))
+
+training_set <- workforce_panel_analysis %>%
+  filter(last_entry_grouped > 2001 & last_entry_grouped < 2013)
+
+test_set <- workforce_panel_analysis %>%
+  filter(last_entry_grouped >= 2013 & last_entry_grouped < 2015) 
+
+holdout_set <- workforce_panel_analysis %>%
+  filter(last_entry_grouped == 2015) 
+
+
+# school_zipcode, studentcount,  type,  percentELL,  percentFRPM,  percentSPED, bachelor_degree_temp,  education_degree_temp,  education_degree,  master_degree_temp,  master_education_degree_temp,  bachelor_gpa_temp,  bachelor_gpa,  master_gpa_temp,  master_gpa,  bachelor_hours_temp,  bachelor_hours,  master_hours_temp,  master_hours
+
+```
+
+Modeling
+```{r}
+        
+# # Step 1 Define null
+# null=glm(resignation~1,data=training_set, family = binomial)
+# 
+# 
+# 
+# 
+# # Step 2 Define full
+# full <- glm(resignation ~ bachelor + master + one_language + two_languages + three_language + four_above_language +
+#               teacher + one_jobdesc + two_jobdesc + three_jobdesc + four_above_jobdesc + one_n_licenses + two_n_licenses +
+#               three_n_licenses + four_n_licenses + five_above_n_licenses + FTE_dummy + one_district_year +
+#               two_district_year + three_district_year + four_district_year + five_above_district_year +
+#               male + `White/Caucasian` + `African-American` +
+#               `American Indian/Native Alaskan` + `Asian Indian` + `Cambodian` + `Chinese` + `Decline To State` +
+#               `Filipino` + `Guamanian` + `Japanese` + `Korean` + `Other Asian` + `Other Pacific Islander` + 
+#               `Samoan` + `94015_home_zip` + `94102_home_zip` + `94103_home_zip` + `94107_home_zip` + `94109_home_zip` +
+#               `94110_home_zip` + `94112_home_zip` + `94114_home_zip` + `94115_home_zip` + `94116_home_zip` +
+#               `94117_home_zip` + `94118_home_zip` + `94121_home_zip` + `94122_home_zip` + `94123_home_zip` +
+#               `94124_home_zip` + `94127_home_zip` + `94131_home_zip` + `94132_home_zip` + `94133_home_zip` +
+#               `94134_home_zip` + `94608_home_zip` + `94610_home_zip` + `94611_home_zip` + `94941_home_zip` +
+#               `NULL_home_zip` + `other_home_zip`  + Cantonese + Mandarin + Spanish +
+#               bachelor*one_jobdesc + bachelor*one_district_year + bachelor*two_district_year + bachelor*three_district_year +
+#               bachelor*four_district_year + master*one_jobdesc + master*one_district_year + master*two_district_year + 
+#               master*three_district_year + master*four_district_year + 
+#               one_jobdesc*one_district_year + one_jobdesc*two_district_year + one_jobdesc*three_district_year +
+#               one_jobdesc*four_district_year + male*one_district_year + male*two_district_year + male*three_district_year +
+#               male*four_district_year + FTE_dummy*one_jobdesc + FTE_dummy*one_district_year + FTE_dummy*two_district_year + FTE_dummy*three_district_year +
+#               FTE_dummy*four_district_year + `White/Caucasian`*one_jobdesc + `White/Caucasian`*one_district_year + `White/Caucasian`*two_district_year +
+#               `White/Caucasian`*three_district_year + `White/Caucasian`*four_district_year + `White/Caucasian`*FTE_dummy + FTE_dummy*male + 
+#               `White/Caucasian`*male + age_under_30 + age_30_40 + age_over_40 + age_under_30*male + age_30_40*male + age_over_40*male, 
+#             data=training_set, family = binomial)
+# 
+# mod_full_rmse <-  rmse(full, test_set)
+# 
+# predicted_scores_full <- predict(full, type = "response")
+# 
+# pred_full <- prediction(predicted_scores_full, training_set$resignation)
+# perf_full <- performance(pred_full, measure = "tpr", x.measure = "fpr")
+# auc_full <- performance(pred_full, measure = "auc")@y.values[[1]]
+# 
+# 
+# # Fit first forward model 
+# Output <- step(null, scope=list(lower=null, upper=full), direction="forward")
+# summary(Output)
+                 
+# slightly adjusted model with year variables removed to allow testing against test set
+model1 <- glm(formula = resignation ~ one_jobdesc + 
+    teacher + `White/Caucasian` + above_3_district_year +
+    age_30_40 + master + one_n_licenses + bachelor + FTE_dummy + 
+    age_under_30 + `94114_home_zip` + `94132_home_zip` + 
+    `94123_home_zip` + `94117_home_zip` + `94118_home_zip` + 
+    `94112_home_zip` + 
+    `White/Caucasian` + FTE_dummy*`White/Caucasian` +
+      teacher*master + teacher*bachelor + teacher*`White/Caucasian` + teacher*above_3_district_year, 
+    family = binomial, data = training_set)
+
+
+## assess model1
+
+
+mod1_rmse <-  rmse(model1, test_set)
+
+mod1_rmse
+
+# predicted_scores <- predict(model1, type = "response")
+# 
+# 
+# pred <- prediction(predicted_scores, training_set$resignation)
+# perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+# plot(perf)
+# abline(0,1,lty = 2)
+# 
+# 
+# auc <- performance(pred, measure = "auc")@y.values[[1]]
+
+
+# simplified model (model2)
+model2 <- glm(formula = resignation ~ one_jobdesc + 
+    teacher + `White/Caucasian` + above_3_district_year +
+    age_30_40 + master + one_n_licenses + bachelor + FTE_dummy + 
+    age_under_30,
+    family = binomial, data = training_set)
+
+## assess model2
+
+
+mod2_rmse <-  rmse(model2, test_set)
+
+mod2_rmse
+
+mod2_rmse_holdout <- rmse(model2, holdout_set)
+
+predicted_scores2 <- predict(model2, type = "response")
+
+
+pred2 <- prediction(predicted_scores2, training_set$resignation)
+perf2 <- performance(pred2, measure = "tpr", x.measure = "fpr")
+plot(perf2)
+abline(0,1,lty = 2)
+
+
+auc2 <- performance(pred2, measure = "auc")@y.values[[1]]
+```
+
+Regress and round
+```{r}
+## get re-scaled coefficients for model2 (regress and round)
+
+rescale_coefs <- function(coefficient, M = 10, estimates){
+  
+  new_coef <- coefficient* ( M/ (abs(max(estimates)) ) )
+  
+  return(round(new_coef,0))
+  
+}
+
+
+model2_results <- tidy(model2)
+model2_estimates <- model2_results$estimate
+model2_varnames <- tbl_df(model2_results$term)
+
+mod2_rescaled_coefs <- tbl_df(sapply(model2_estimates, rescale_coefs, estimate = model2_estimates))
+
+final_reg_round_table2 <- bind_cols(model2_varnames, mod2_rescaled_coefs)
+
+
+
+# distribution of risk scores in training set
+
+risk_score <- training_set %>%
+  mutate(risk = (9*one_jobdesc) +
+                        (8*teacher) +
+                        (5*`White/Caucasian`) +
+                        (9*above_3_district_year) +
+                        (6*age_30_40) +
+                        (5*master) +
+                        (5*one_n_licenses) +
+                        (5*bachelor) +
+                        (10*FTE_dummy)) %>%
+  select(c(one_jobdesc, teacher, `White/Caucasian`, above_3_district_year, age_30_40, master, one_n_licenses, bachelor, FTE_dummy, risk, resignation))
+
+hist(risk_score$risk[risk_score$resignation ==1])
+				
+summary(risk_score$risk[risk_score$resignation ==0])
+
+ggplot(risk_score, aes(risk, fill = as.factor(resignation), color = as.factor(resignation))) +
+  geom_density(na.rm = TRUE, alpha = .5) +
+  labs(x = "Risk Score", y = "Density", title = "Distribution of Risk Scores", fill = "Resignation") + 
+  theme_minimal()
+
+```
+
