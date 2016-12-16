@@ -11,6 +11,8 @@ The bulk of this project was organizing and aggregating the commute destinations
 
 We find that there are small pockets of low rent, low commute neighborhoods. We estimate a time cost of commuting of approximately $20 per additional one way minute per month. Using regression, the commute cost appears to be higher, around $40 per minute per month, however the results were not conclusive and unstable depending on covariates. 
 
+[Project report here:](https://www.ocf.berkeley.edu/~ngstetson/2016/12/12/51/)
+
 ## **Software:**
 
 Python, version 2.7, Anaconda distribution
